@@ -93,9 +93,6 @@ Session parseSessionResponse(const nlohmann::json& data) {
   auto px = data.find("proxy");
   if (px != data.end() && px->is_object()) {
     ResolvedProxyConfig p;
-    if (auto v = jsonStr(*px, "server")) p.server = *v;
-    if (auto v = jsonStr(*px, "username")) p.username = *v;
-    if (auto v = jsonStr(*px, "password")) p.password = *v;
     if (auto v = jsonStr(*px, "timezoneId")) p.timezoneId = *v;
     if (auto v = jsonStr(*px, "country")) p.country = *v;
     p.tier = jsonStr(*px, "tier");

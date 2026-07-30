@@ -194,24 +194,67 @@ TEST_CASE("parseSessionResponse distinguishes absent from empty storageState") {
 }
 
 TEST_CASE("parseSessionResponse parses the resolved proxy config") {
+  // The gateway sends confirmation only (timezone/country/tier); any
+  // credential keys an older gateway might include are ignored by design.
   json body = {{"sessionId", "s"},
                {"wsEndpoint", "wss://gw/ws/s"},
                {"proxy",
-                {{"server", "http://gate.decodo.com:7000"},
-                 {"username", "u"},
-                 {"password", "p"},
-                 {"timezoneId", "America/Los_Angeles"},
+                {{"timezoneId", "America/Los_Angeles"},
                  {"country", "us"},
                  {"tier", "mobile"}}}};
   Session s = parseSessionResponse(body);
   REQUIRE(s.proxy.has_value());
-  CHECK(s.proxy->server == "http://gate.decodo.com:7000");
-  CHECK(s.proxy->username == "u");
-  CHECK(s.proxy->password == "p");
   CHECK(s.proxy->timezoneId == "America/Los_Angeles");
   CHECK(s.proxy->country == "us");
   REQUIRE(s.proxy->tier.has_value());
   CHECK(s.proxy->tier.value() == "mobile");
+}
+
+// REGRESSION GUARD for the shipped fix: the resolved-proxy type carries NO
+// credentials. ResolvedProxyConfig used to carry server/username/password; the
+// gateway stopped sending them (they disclose the proxy vendor's account), so
+// this binding parsed empty strings forever — a contract that was not merely
+// dead but misleading. C++ has no reflection, so the guard is twofold: the
+// static_asserts below stop compiling if a credential member is re-added, and
+// the runtime check proves a gateway still emitting the old keys cannot smuggle
+// them through the parser.
+template <typename T, typename = void>
+struct has_server : std::false_type {};
+template <typename T>
+struct has_server<T, std::void_t<decltype(std::declval<T>().server)>> : std::true_type {};
+template <typename T, typename = void>
+struct has_username : std::false_type {};
+template <typename T>
+struct has_username<T, std::void_t<decltype(std::declval<T>().username)>> : std::true_type {};
+template <typename T, typename = void>
+struct has_password : std::false_type {};
+template <typename T>
+struct has_password<T, std::void_t<decltype(std::declval<T>().password)>> : std::true_type {};
+
+static_assert(!has_server<ResolvedProxyConfig>::value,
+              "ResolvedProxyConfig must not carry the proxy vendor's address");
+static_assert(!has_username<ResolvedProxyConfig>::value,
+              "ResolvedProxyConfig must not carry the proxy vendor's account");
+static_assert(!has_password<ResolvedProxyConfig>::value,
+              "ResolvedProxyConfig must not carry the proxy vendor's password");
+
+TEST_CASE("a gateway still sending proxy credentials cannot smuggle them through") {
+  json body = {{"sessionId", "s"},
+               {"wsEndpoint", "wss://gw/ws/s"},
+               {"proxy",
+                {{"timezoneId", "America/Los_Angeles"},
+                 {"country", "us"},
+                 {"tier", "mobile"},
+                 {"server", "http://resi.vendor.example:8000"},
+                 {"username", "acct-12345"},
+                 {"password", "hunter2"}}}};
+  Session s = parseSessionResponse(body);
+  REQUIRE(s.proxy.has_value());
+  CHECK(s.proxy->timezoneId == "America/Los_Angeles");
+  CHECK(s.proxy->country == "us");
+  // Nothing the caller can reach carries the account.
+  CHECK(s.proxy->timezoneId.find("vendor") == std::string::npos);
+  CHECK(s.proxy->country.find("acct-") == std::string::npos);
 }
 
 TEST_CASE("parseSessionResponse tolerates a proxy without a tier") {

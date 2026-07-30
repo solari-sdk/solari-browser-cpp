@@ -67,11 +67,10 @@ using ProxySpec = std::variant<std::string, ProxyRequest>;
 /** JSON for a `ProxySpec`, as sent under `proxy`. Unset ProxyRequest fields are omitted. */
 Json proxyToJson(const ProxySpec& spec);
 
-/** Resolved proxy credentials returned on the session response. */
+/** Coarse confirmation of the proxy the gateway resolved for a session.
+ *  Carries NO credentials by design: egress is applied server-side, so a
+ *  caller never dials the proxy and never needs its address or account. */
 struct ResolvedProxyConfig {
-  std::string server;
-  std::string username;
-  std::string password;
   std::string timezoneId;
   std::string country;
   std::optional<std::string> tier;  // residential | static | mobile
