@@ -21,10 +21,8 @@ TEST_CASE("buildCreateBody is empty when nothing is set (caller omits the body)"
 TEST_CASE("buildCreateBody omits falsy flags, keeps the true ones") {
   CreateSessionOptions o;
   o.stealth = true;
-  o.webBotAuth = true;
   json body = buildCreateBody(o);
   CHECK(body["stealth"] == true);
-  CHECK(body["webBotAuth"] == true);
   // recording/captcha are false -> omitted entirely, never sent as `false`.
   CHECK_FALSE(body.contains("recording"));
   CHECK_FALSE(body.contains("captcha"));

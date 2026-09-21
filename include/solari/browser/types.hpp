@@ -86,8 +86,6 @@ struct CreateSessionOptions {
   bool stealth = false;
   /** Managed captcha solving. Requires `stealth`. */
   bool captcha = false;
-  /** Sign outbound requests with Cloudflare Web Bot Auth. Independent of `stealth`. */
-  bool webBotAuth = false;
   /** Managed proxy egress. Requires `stealth`. */
   std::optional<ProxySpec> proxy;
 };

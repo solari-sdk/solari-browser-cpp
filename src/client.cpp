@@ -63,7 +63,6 @@ nlohmann::json buildCreateBody(const CreateSessionOptions& opts) {
   if (opts.recording) body["recording"] = true;
   if (opts.stealth) body["stealth"] = true;
   if (opts.captcha) body["captcha"] = true;
-  if (opts.webBotAuth) body["webBotAuth"] = true;
   if (opts.proxy) body["proxy"] = proxyToJson(*opts.proxy);
   return body;
 }
