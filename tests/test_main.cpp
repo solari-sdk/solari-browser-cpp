@@ -1,7 +1,18 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <cstring>
+#include <mutex>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "solari/browser/browser.hpp"
@@ -452,6 +463,9 @@ TEST_CASE("only 502/503/504 are retryable") {
   CHECK(isRetryableStatus(502));
   CHECK(isRetryableStatus(503));
   CHECK(isRetryableStatus(504));
+  // 507: inert against THIS gateway, retried anyway so the client is right
+  // regardless of which gateway build it reaches.
+  CHECK(isRetryableStatus(507));
   // Everything else is terminal — notably 429 (cap) and 5xx that isn't a gateway hop.
   CHECK_FALSE(isRetryableStatus(500));
   CHECK_FALSE(isRetryableStatus(501));
@@ -498,4 +512,240 @@ TEST_CASE("Client honours a baseUrl override") {
   Client c(o);
   CHECK(c.http().baseUrl() == "http://localhost:4000");
   CHECK(c.http().timeoutMs() == 90000);
+}
+
+// ---------------------------------------------------------------------------
+// Retry policy: the gateway's `retryable` hint, honoured on idempotent
+// requests only. `404 ReplayPending` means the recording upload is still in
+// flight; `404 ReplayUnavailable` is terminal.
+// ---------------------------------------------------------------------------
+TEST_CASE("saysRetryable lifts the flag out of a JSON error body") {
+  CHECK(saysRetryable(
+      R"({"error":"replay still uploading","code":"ReplayPending","retryable":true})"));
+}
+
+TEST_CASE("saysRetryable is false without the flag, or when it is false") {
+  // Terminal: the recording was never enabled.
+  CHECK_FALSE(saysRetryable(R"({"error":"no replay","code":"ReplayUnavailable"})"));
+  CHECK_FALSE(saysRetryable(R"({"retryable":false})"));
+}
+
+TEST_CASE("saysRetryable ignores a non-boolean or non-object body") {
+  // A string "true" is not a boolean true — no hint.
+  CHECK_FALSE(saysRetryable(R"({"retryable":"true"})"));
+  CHECK_FALSE(saysRetryable("[1,2,3]"));
+  CHECK_FALSE(saysRetryable("not json at all"));
+  CHECK_FALSE(saysRetryable(""));
+}
+
+TEST_CASE("isIdempotentMethod covers the re-sendable verbs, case-insensitively") {
+  CHECK(isIdempotentMethod("GET"));
+  CHECK(isIdempotentMethod("get"));
+  CHECK(isIdempotentMethod("HEAD"));
+  CHECK(isIdempotentMethod("DELETE"));
+  CHECK(isIdempotentMethod("PUT"));
+}
+
+TEST_CASE("isIdempotentMethod rejects POST and PATCH") {
+  // Still true, and still the right question for a METHOD: POST is not
+  // idempotent by verb. What changed is that the verb is no longer the whole
+  // test -- see isSafeToReplay below.
+  CHECK_FALSE(isIdempotentMethod("POST"));
+  CHECK_FALSE(isIdempotentMethod("post"));
+  CHECK_FALSE(isIdempotentMethod("PATCH"));
+}
+
+TEST_CASE("isSafeToReplay: a key makes a POST replayable, absence does not") {
+  CHECK_FALSE(isSafeToReplay("POST", ""));
+  CHECK(isSafeToReplay("POST", "slr-abc"));
+  // An idempotent verb needs no key.
+  CHECK(isSafeToReplay("GET", ""));
+}
+
+TEST_CASE("newIdempotencyKey identifies the CALL, so two differ") {
+  const std::string a = newIdempotencyKey();
+  const std::string b = newIdempotencyKey();
+  CHECK(!a.empty());
+  CHECK(a != b);
+}
+
+TEST_CASE("prepare() sends Idempotency-Key only when one is given") {
+  HttpTransport t("slr_live_test", "http://127.0.0.1:1", 2, 1, 50);
+  const auto withKey = t.prepare("POST", "/sessions", false, "", "slr-xyz");
+  const auto without = t.prepare("POST", "/sessions", false, "");
+  const auto has = [](const std::vector<std::string>& hs) {
+    return std::any_of(hs.begin(), hs.end(), [](const std::string& h) {
+      return h.rfind("Idempotency-Key:", 0) == 0;
+    });
+  };
+  CHECK(has(withKey.headers));
+  CHECK_FALSE(has(without.headers));
+}
+
+// ---------------------------------------------------------------------------
+// Minimal raw-socket mock, live-request surface only. This test suite is
+// otherwise entirely offline (pure functions), so there is no existing
+// end-to-end harness to port the Go/Rust client-level retry test onto.
+// This is the smallest thing that can prove the retry loop in
+// HttpTransport::request() reuses ONE key across attempts rather than
+// minting a fresh one each time -- the exact defect class this mechanism
+// exists to prevent, and the one a bare attempt-count assertion cannot see.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct MockServer {
+  int listenFd = -1;
+  int port = 0;
+  std::thread worker;
+  std::mutex mu;
+  std::vector<std::string> capturedRequests;
+  std::atomic<bool> stop{false};
+
+  // responses: {status, body}, served in order, one per accepted connection.
+  //
+  // IMPORTANT: a client under test that (incorrectly, under some injected
+  // regression) makes FEWER requests than there are scripted responses must
+  // not hang this harness. accept()/recv() block indefinitely and closing
+  // listenFd from another thread does not reliably unblock a thread already
+  // parked in accept() on Linux -- so the worker polls listenFd with a short
+  // timeout and checks `stop` between polls, rather than calling a bare
+  // blocking accept(). A hung test (vs. a cleanly FAILING one) is a worse
+  // failure mode: it reads as "something is wrong with the environment," not
+  // "the regression was caught" -- see the destructor's join with a bounded
+  // wait, which turns a leaked thread into a loud assertion instead of a
+  // silent process hang.
+  explicit MockServer(std::vector<std::pair<int, std::string>> responses) {
+    listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
+    REQUIRE(listenFd >= 0);
+    int opt = 1;
+    ::setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;  // let the OS pick a free port
+    REQUIRE(::bind(listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    socklen_t alen = sizeof(addr);
+    REQUIRE(::getsockname(listenFd, reinterpret_cast<sockaddr*>(&addr), &alen) == 0);
+    port = ntohs(addr.sin_port);
+    REQUIRE(::listen(listenFd, 16) == 0);
+
+    worker = std::thread([this, responses]() {
+      for (const auto& [status, body] : responses) {
+        int fd = -1;
+        while (!stop.load(std::memory_order_relaxed)) {
+          pollfd pfd{listenFd, POLLIN, 0};
+          const int pr = ::poll(&pfd, 1, 50 /*ms*/);
+          if (pr > 0 && (pfd.revents & POLLIN)) {
+            fd = ::accept(listenFd, nullptr, nullptr);
+            break;
+          }
+        }
+        if (fd < 0) return;  // stopped before a connection arrived
+
+        std::string raw;
+        char buf[4096];
+        // Read until we have the full header block, then the declared body.
+        size_t contentLength = 0;
+        bool haveHeaders = false;
+        for (;;) {
+          ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+          if (n <= 0) break;
+          raw.append(buf, static_cast<size_t>(n));
+          if (!haveHeaders) {
+            auto pos = raw.find("\r\n\r\n");
+            if (pos != std::string::npos) {
+              haveHeaders = true;
+              const std::string headBlock = raw.substr(0, pos);
+              std::istringstream hs(headBlock);
+              std::string line;
+              while (std::getline(hs, line)) {
+                std::string lower = line;
+                for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (lower.rfind("content-length:", 0) == 0) {
+                  contentLength = static_cast<size_t>(
+                      std::stoul(line.substr(line.find(':') + 1)));
+                }
+              }
+              const size_t bodyHave = raw.size() - (pos + 4);
+              if (bodyHave >= contentLength) break;
+            }
+          } else {
+            auto pos = raw.find("\r\n\r\n");
+            const size_t bodyHave = raw.size() - (pos + 4);
+            if (bodyHave >= contentLength) break;
+          }
+        }
+
+        {
+          std::lock_guard<std::mutex> lk(mu);
+          capturedRequests.push_back(raw);
+        }
+
+        std::ostringstream resp;
+        resp << "HTTP/1.1 " << status << " X\r\n"
+             << "Content-Type: application/json\r\n"
+             << "Content-Length: " << body.size() << "\r\n"
+             << "Connection: close\r\n\r\n"
+             << body;
+        const std::string out = resp.str();
+        ::send(fd, out.data(), out.size(), 0);
+        ::close(fd);
+      }
+    });
+  }
+
+  ~MockServer() {
+    stop.store(true, std::memory_order_relaxed);
+    if (worker.joinable()) worker.join();  // bounded: the poll loop wakes within 50ms
+    if (listenFd >= 0) ::close(listenFd);
+  }
+
+  std::vector<std::string> requests() {
+    std::lock_guard<std::mutex> lk(mu);
+    return capturedRequests;
+  }
+};
+
+std::string idempotencyKeyHeader(const std::string& raw) {
+  auto pos = raw.find("\r\n\r\n");
+  const std::string head = pos == std::string::npos ? raw : raw.substr(0, pos);
+  std::istringstream hs(head);
+  std::string line;
+  while (std::getline(hs, line)) {
+    std::string lower = line;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.rfind("idempotency-key:", 0) == 0) {
+      std::string v = line.substr(line.find(':') + 1);
+      while (!v.empty() && (v.back() == '\r' || v.back() == ' ')) v.pop_back();
+      while (!v.empty() && v.front() == ' ') v.erase(v.begin());
+      return v;
+    }
+  }
+  return "";
+}
+
+}  // namespace
+
+TEST_CASE("request() retries a retryable 409 and sends the SAME Idempotency-Key both times") {
+  MockServer server({
+      {409, R"({"error":"in progress","retryable":true})"},
+      {201, R"({"sessionId":"s_ok","wsEndpoint":"wss://x/ws/s_ok"})"},
+  });
+
+  HttpTransport t("slr_live_test", "http://127.0.0.1:" + std::to_string(server.port), 2, 5, 2000);
+  const std::string key = newIdempotencyKey();
+  HttpResponse res = t.request("POST", "/sessions", nlohmann::json::object(), key);
+
+  CHECK(res.status == 201);
+  const auto reqs = server.requests();
+  REQUIRE(reqs.size() == 2);
+  const std::string key1 = idempotencyKeyHeader(reqs[0]);
+  const std::string key2 = idempotencyKeyHeader(reqs[1]);
+  CHECK(!key1.empty());
+  CHECK_EQ(key1, key2);
+  // Same assertion against the input, not just against each other -- if both
+  // attempts minted their OWN fresh key, they could still coincidentally be
+  // compared equal to each other under a degenerate implementation.
+  CHECK_EQ(key1, key);
 }

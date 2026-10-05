@@ -158,7 +158,7 @@ Session SessionsResource::create(const CreateSessionOptions& opts) {
   std::optional<nlohmann::json> payload;
   if (!body.empty()) payload = body;  // no options -> no body at all
 
-  HttpResponse res = client_->http().request("POST", "/sessions", payload);
+  HttpResponse res = client_->http().request("POST", "/sessions", payload, newIdempotencyKey());
   if (!res.ok()) throwHttpError("Solari POST /sessions", res.status, res.body);
 
   const nlohmann::json data = parseJsonBody(res.body, "session");
