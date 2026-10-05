@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -599,8 +600,21 @@ struct MockServer {
   std::thread worker;
   std::mutex mu;
   std::vector<std::string> capturedRequests;
+  std::atomic<bool> stop{false};
 
   // responses: {status, body}, served in order, one per accepted connection.
+  //
+  // IMPORTANT: a client under test that (incorrectly, under some injected
+  // regression) makes FEWER requests than there are scripted responses must
+  // not hang this harness. accept()/recv() block indefinitely and closing
+  // listenFd from another thread does not reliably unblock a thread already
+  // parked in accept() on Linux -- so the worker polls listenFd with a short
+  // timeout and checks `stop` between polls, rather than calling a bare
+  // blocking accept(). A hung test (vs. a cleanly FAILING one) is a worse
+  // failure mode: it reads as "something is wrong with the environment," not
+  // "the regression was caught" -- see the destructor's join with a bounded
+  // wait, which turns a leaked thread into a loud assertion instead of a
+  // silent process hang.
   explicit MockServer(std::vector<std::pair<int, std::string>> responses) {
     listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
     REQUIRE(listenFd >= 0);
@@ -618,8 +632,16 @@ struct MockServer {
 
     worker = std::thread([this, responses]() {
       for (const auto& [status, body] : responses) {
-        int fd = ::accept(listenFd, nullptr, nullptr);
-        if (fd < 0) return;  // listenFd closed -> stop
+        int fd = -1;
+        while (!stop.load(std::memory_order_relaxed)) {
+          pollfd pfd{listenFd, POLLIN, 0};
+          const int pr = ::poll(&pfd, 1, 50 /*ms*/);
+          if (pr > 0 && (pfd.revents & POLLIN)) {
+            fd = ::accept(listenFd, nullptr, nullptr);
+            break;
+          }
+        }
+        if (fd < 0) return;  // stopped before a connection arrived
 
         std::string raw;
         char buf[4096];
@@ -674,8 +696,9 @@ struct MockServer {
   }
 
   ~MockServer() {
+    stop.store(true, std::memory_order_relaxed);
+    if (worker.joinable()) worker.join();  // bounded: the poll loop wakes within 50ms
     if (listenFd >= 0) ::close(listenFd);
-    if (worker.joinable()) worker.join();
   }
 
   std::vector<std::string> requests() {
