@@ -24,6 +24,23 @@ namespace solari::browser {
 nlohmann::json buildCreateBody(const CreateSessionOptions& opts);
 
 /**
+ * Decide whether a `DELETE /sessions/:id` response means the release FAILED.
+ *
+ * A BARE 404 is success — the session is already gone. A 404 the gateway marked
+ * `InvalidSessionId` is a FAILURE: the gateway acks 204 for any authentic
+ * session id, including one whose session has already ended (the handler is
+ * idempotent by design and never consults the pool before acking). So a 404
+ * does not mean "already released"; it means the gateway refused the id
+ * (malformed, forged, or another org's) and released nothing, leaving the pool
+ * slot held until orphan-grace. Treating that as success is what made these
+ * releases leak slots silently.
+ *
+ * Pure, and public so tests can assert the rule without a live gateway.
+ * Mirrors `releaseRejection` in sdk/src/index.ts.
+ */
+bool releaseRejected(int status, const std::string& body);
+
+/**
  * Parse a `201 POST /sessions` body into a `Session`. Pure — the presigned
  * storageState fetch is left to the caller. Derives `cdpEndpoint` from
  * `wsEndpoint` when the gateway omits it, and defaults `expiresAt` to one hour
