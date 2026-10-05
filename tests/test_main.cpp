@@ -452,6 +452,9 @@ TEST_CASE("only 502/503/504 are retryable") {
   CHECK(isRetryableStatus(502));
   CHECK(isRetryableStatus(503));
   CHECK(isRetryableStatus(504));
+  // 507: inert against THIS gateway, retried anyway so the client is right
+  // regardless of which gateway build it reaches.
+  CHECK(isRetryableStatus(507));
   // Everything else is terminal — notably 429 (cap) and 5xx that isn't a gateway hop.
   CHECK_FALSE(isRetryableStatus(500));
   CHECK_FALSE(isRetryableStatus(501));
@@ -498,4 +501,72 @@ TEST_CASE("Client honours a baseUrl override") {
   Client c(o);
   CHECK(c.http().baseUrl() == "http://localhost:4000");
   CHECK(c.http().timeoutMs() == 90000);
+}
+
+// ---------------------------------------------------------------------------
+// Retry policy: the gateway's `retryable` hint, honoured on idempotent
+// requests only. `404 ReplayPending` means the recording upload is still in
+// flight; `404 ReplayUnavailable` is terminal.
+// ---------------------------------------------------------------------------
+TEST_CASE("saysRetryable lifts the flag out of a JSON error body") {
+  CHECK(saysRetryable(
+      R"({"error":"replay still uploading","code":"ReplayPending","retryable":true})"));
+}
+
+TEST_CASE("saysRetryable is false without the flag, or when it is false") {
+  // Terminal: the recording was never enabled.
+  CHECK_FALSE(saysRetryable(R"({"error":"no replay","code":"ReplayUnavailable"})"));
+  CHECK_FALSE(saysRetryable(R"({"retryable":false})"));
+}
+
+TEST_CASE("saysRetryable ignores a non-boolean or non-object body") {
+  // A string "true" is not a boolean true — no hint.
+  CHECK_FALSE(saysRetryable(R"({"retryable":"true"})"));
+  CHECK_FALSE(saysRetryable("[1,2,3]"));
+  CHECK_FALSE(saysRetryable("not json at all"));
+  CHECK_FALSE(saysRetryable(""));
+}
+
+TEST_CASE("isIdempotentMethod covers the re-sendable verbs, case-insensitively") {
+  CHECK(isIdempotentMethod("GET"));
+  CHECK(isIdempotentMethod("get"));
+  CHECK(isIdempotentMethod("HEAD"));
+  CHECK(isIdempotentMethod("DELETE"));
+  CHECK(isIdempotentMethod("PUT"));
+}
+
+TEST_CASE("isIdempotentMethod rejects POST and PATCH") {
+  // Still true, and still the right question for a METHOD: POST is not
+  // idempotent by verb. What changed is that the verb is no longer the whole
+  // test -- see isSafeToReplay below.
+  CHECK_FALSE(isIdempotentMethod("POST"));
+  CHECK_FALSE(isIdempotentMethod("post"));
+  CHECK_FALSE(isIdempotentMethod("PATCH"));
+}
+
+TEST_CASE("isSafeToReplay: a key makes a POST replayable, absence does not") {
+  CHECK_FALSE(isSafeToReplay("POST", ""));
+  CHECK(isSafeToReplay("POST", "slr-abc"));
+  // An idempotent verb needs no key.
+  CHECK(isSafeToReplay("GET", ""));
+}
+
+TEST_CASE("newIdempotencyKey identifies the CALL, so two differ") {
+  const std::string a = newIdempotencyKey();
+  const std::string b = newIdempotencyKey();
+  CHECK(!a.empty());
+  CHECK(a != b);
+}
+
+TEST_CASE("prepare() sends Idempotency-Key only when one is given") {
+  HttpTransport t("slr_live_test", "http://127.0.0.1:1", 2, 1, 50);
+  const auto withKey = t.prepare("POST", "/sessions", false, "", "slr-xyz");
+  const auto without = t.prepare("POST", "/sessions", false, "");
+  const auto has = [](const std::vector<std::string>& hs) {
+    return std::any_of(hs.begin(), hs.end(), [](const std::string& h) {
+      return h.rfind("Idempotency-Key:", 0) == 0;
+    });
+  };
+  CHECK(has(withKey.headers));
+  CHECK_FALSE(has(without.headers));
 }

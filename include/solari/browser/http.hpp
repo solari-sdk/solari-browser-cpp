@@ -32,8 +32,38 @@ inline constexpr long kStorageStateTimeoutMs = 8000;
  */
 std::string encodeURIComponent(const std::string& s);
 
-/** The only statuses worth retrying: 502, 503, 504. */
+/** The only statuses worth retrying on their own: 502, 503, 504. */
 bool isRetryableStatus(int status);
+
+/**
+ * Whether a request is safe to send twice. The browser API issues no
+ * Idempotency-Key, so the gateway's `retryable` hint is honoured ONLY for
+ * these methods — a re-sent POST /sessions could leave a second live session
+ * behind.
+ */
+bool isIdempotentMethod(const std::string& method);
+
+/**
+ * Whether THIS REQUEST may be sent again. Per-request, not per-method: a POST
+ * is not idempotent by verb, but a POST carrying an `Idempotency-Key` is safe
+ * to replay, because the server answers the second copy from the first one's
+ * result instead of creating twice.
+ *
+ * RETRACTED REASON, kept deliberately: this used to be method-only, because
+ * the browser API issued no Idempotency-Key and a re-sent POST /sessions could
+ * leave a second live session behind. Creates now mint one.
+ */
+bool isSafeToReplay(const std::string& method, const std::string& idempotencyKey);
+
+/** A key identifies the CALL, not the attempt: minted once, reused by retries. */
+std::string newIdempotencyKey();
+
+/**
+ * Whether the gateway explicitly marked a response retryable. The flag can
+ * appear on a status OUTSIDE the 5xx allowlist — today `404 ReplayPending`,
+ * where the recording upload is still in flight.
+ */
+bool saysRetryable(const std::string& body);
 
 /**
  * Rewrite a Playwright-wire endpoint into its raw-CDP sibling by swapping the
@@ -78,7 +108,8 @@ class HttpTransport {
    * matching the reference SDK's static header map.
    */
   PreparedRequest prepare(const std::string& method, const std::string& path,
-                          bool hasBody, const std::string& body) const;
+                          bool hasBody, const std::string& body,
+                          const std::string& idempotencyKey = "") const;
 
   /**
    * Perform a request under the retry policy. A non-retryable non-2xx response
@@ -86,7 +117,8 @@ class HttpTransport {
    * tolerates 404). Throws SolariError only when every attempt failed.
    */
   HttpResponse request(const std::string& method, const std::string& path,
-                       const std::optional<nlohmann::json>& body = std::nullopt);
+                       const std::optional<nlohmann::json>& body = std::nullopt,
+                       const std::string& idempotencyKey = "");
 
  private:
   struct RawResponse {

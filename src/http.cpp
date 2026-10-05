@@ -3,9 +3,13 @@
 #include <curl/curl.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
+#include <random>
+#include <sstream>
 #include <thread>
 
 #include "solari/browser/errors.hpp"
@@ -94,8 +98,58 @@ std::string encodeURIComponent(const std::string& s) {
   return out;
 }
 
+// 507 is listed although THIS gateway does not emit one (censused 2026-09-22:
+// browser emits 501/502/503 only). Desktop's InsufficientCapacity 507 is
+// transient, and a client's correctness must not depend on which gateway build
+// it reaches. Inert today, deliberately — do not remove it as dead code.
 bool isRetryableStatus(int status) {
-  return status == 502 || status == 503 || status == 504;
+  return status == 502 || status == 503 || status == 504 || status == 507;
+}
+
+// Methods safe to send twice. The browser API issues no Idempotency-Key, so
+// the `retryable` hint is honoured ONLY for these: a re-sent POST /sessions
+// could leave a second live session behind.
+std::string newIdempotencyKey() {
+  // Dependency-free on purpose: the server treats the key as opaque and scopes
+  // it to (org, key), so process-uniqueness is enough. Adding a UUID library to
+  // a published package for one string is not worth the supply-chain surface.
+  static std::atomic<unsigned long long> counter{0};
+  const auto now = std::chrono::system_clock::now().time_since_epoch();
+  const auto ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+  std::ostringstream os;
+  os << "slr-" << std::hex << ns << "-"
+     << counter.fetch_add(1, std::memory_order_relaxed) << "-"
+     << std::hex << std::random_device{}();
+  return os.str();
+}
+
+bool isSafeToReplay(const std::string& method, const std::string& idempotencyKey) {
+  return isIdempotentMethod(method) || !idempotencyKey.empty();
+}
+
+bool isIdempotentMethod(const std::string& method) {
+  std::string m;
+  m.reserve(method.size());
+  for (const char c : method) m.push_back(static_cast<char>(std::toupper(
+      static_cast<unsigned char>(c))));
+  return m == "GET" || m == "HEAD" || m == "DELETE" || m == "PUT";
+}
+
+// Whether the gateway explicitly marked this response retryable. The flag can
+// appear on a status OUTSIDE the 5xx allowlist — today `404 ReplayPending`,
+// where the recording upload is still in flight. Mirrors the reference SDK's
+// `try { JSON.parse(text) } catch {}` + `parsed.retryable === true`.
+bool saysRetryable(const std::string& body) {
+  nlohmann::json parsed;
+  try {
+    parsed = nlohmann::json::parse(body);
+  } catch (const std::exception&) {
+    return false;  // a non-JSON body carries no hint
+  }
+  if (!parsed.is_object()) return false;
+  const auto it = parsed.find("retryable");
+  return it != parsed.end() && it->is_boolean() && it->get<bool>();
 }
 
 std::string deriveCdpFromWs(const std::string& wsEndpoint) {
@@ -146,7 +200,8 @@ HttpTransport::HttpTransport(std::string apiKey, std::string baseUrl,
 
 PreparedRequest HttpTransport::prepare(const std::string& method,
                                        const std::string& path, bool hasBody,
-                                       const std::string& body) const {
+                                       const std::string& body,
+                                       const std::string& idempotencyKey) const {
   PreparedRequest r;
   r.method = method;
   r.url = baseUrl_ + path;
@@ -155,6 +210,9 @@ PreparedRequest HttpTransport::prepare(const std::string& method,
   // Mirrors the reference SDK's static header map: both headers, always.
   r.headers.push_back("Authorization: Bearer " + apiKey_);
   r.headers.push_back("Content-Type: application/json");
+  if (!idempotencyKey.empty()) {
+    r.headers.push_back("Idempotency-Key: " + idempotencyKey);
+  }
   return r;
 }
 
@@ -171,10 +229,12 @@ HttpTransport::RawResponse HttpTransport::perform(const PreparedRequest& req) co
 
 HttpResponse HttpTransport::request(const std::string& method,
                                     const std::string& path,
-                                    const std::optional<nlohmann::json>& body) {
+                                    const std::optional<nlohmann::json>& body,
+                                    const std::string& idempotencyKey) {
   const bool hasBody = body.has_value();
-  const PreparedRequest req =
-      prepare(method, path, hasBody, hasBody ? body->dump() : std::string());
+  // Prepared ONCE, outside the retry loop, so every attempt carries the same key.
+  const PreparedRequest req = prepare(
+      method, path, hasBody, hasBody ? body->dump() : std::string(), idempotencyKey);
 
   std::string lastErr;
   for (int attempt = 1; attempt <= maxAttempts_; attempt++) {
@@ -184,7 +244,10 @@ HttpResponse HttpTransport::request(const std::string& method,
       if (res.status >= 200 && res.status < 300) {
         return HttpResponse{res.status, std::move(res.body)};
       }
-      if (!isRetryableStatus(res.status)) {
+      const bool retryThis =
+          isRetryableStatus(res.status) ||
+          (isSafeToReplay(method, idempotencyKey) && saysRetryable(res.body));
+      if (!retryThis) {
         return HttpResponse{res.status, std::move(res.body)};
       }
       lastErr = "Solari " + method + " " + path + ": " + std::to_string(res.status);
