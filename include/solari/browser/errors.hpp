@@ -28,6 +28,12 @@ inline constexpr const char* ConcurrencyLimitExceeded = "ConcurrencyLimitExceede
 inline constexpr const char* PlanLimitExceeded = "PlanLimitExceeded";
 /** The acquired browser failed its health probe. */
 inline constexpr const char* BrowserUnhealthy = "BrowserUnhealthy";
+/**
+ * 404 — the gateway refused a session id (malformed, forged, or another org's)
+ * and acted on nothing. Only meaningful on a 404; see
+ * `SessionsResource::release` for why a 404 is not blanket-success there.
+ */
+inline constexpr const char* InvalidSessionId = "InvalidSessionId";
 }  // namespace error_code
 
 /** Every failure the SDK raises. `status` is unset for transport-level errors. */

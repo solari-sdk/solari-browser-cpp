@@ -515,6 +515,40 @@ TEST_CASE("Client honours a baseUrl override") {
 }
 
 // ---------------------------------------------------------------------------
+// DELETE /sessions/:id — a bare 404 is success, InvalidSessionId is not
+// ---------------------------------------------------------------------------
+
+TEST_CASE("releaseRejected treats 2xx as success") {
+  CHECK(releaseRejected(204, "") == false);
+  CHECK(releaseRejected(200, "") == false);
+}
+
+TEST_CASE("releaseRejected tolerates a bare 404 (pre-InvalidSessionId gateway)") {
+  CHECK(releaseRejected(404, "") == false);
+  CHECK(releaseRejected(404, R"({"error":"Not Found"})") == false);
+}
+
+TEST_CASE("releaseRejected tolerates a 404 carrying an unrelated code") {
+  CHECK(releaseRejected(404, R"({"error":"Not Found","code":"SomethingElse"})") == false);
+}
+
+TEST_CASE("releaseRejected FAILS a 404 marked InvalidSessionId — nothing was released") {
+  CHECK(releaseRejected(404, R"({"error":"Not Found","code":"InvalidSessionId"})") == true);
+}
+
+TEST_CASE("releaseRejected needs a real JSON code, not the string anywhere in the body") {
+  // A non-JSON body that merely contains the word must not trip the refusal.
+  CHECK(releaseRejected(404, "InvalidSessionId") == false);
+  // A non-string `code` is not a code (mirrors the TS typeof check).
+  CHECK(releaseRejected(404, R"({"code":404})") == false);
+}
+
+TEST_CASE("releaseRejected fails every other error status regardless of body") {
+  CHECK(releaseRejected(400, "") == true);
+  CHECK(releaseRejected(500, R"({"code":"InvalidSessionId"})") == true);
+}
+
+// ---------------------------------------------------------------------------
 // Retry policy: the gateway's `retryable` hint, honoured on idempotent
 // requests only. `404 ReplayPending` means the recording upload is still in
 // flight; `404 ReplayUnavailable` is terminal.

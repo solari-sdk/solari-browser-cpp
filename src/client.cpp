@@ -1,5 +1,7 @@
 #include "solari/browser/client.hpp"
 
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "solari/browser/errors.hpp"
@@ -183,13 +185,22 @@ Json SessionsResource::get(const std::string& id) {
   return parseJsonBody(res.body, "session");
 }
 
+bool releaseRejected(int status, const std::string& body) {
+  if (status < 400) return false;
+  if (status == 404) {
+    const std::optional<std::string> code = parseErrorCode(body);
+    return code.has_value() && *code == error_code::InvalidSessionId;
+  }
+  return true;
+}
+
 void SessionsResource::release(const std::string& id) {
   const std::string path = "/sessions/" + encodeURIComponent(id);
   HttpResponse res = client_->http().request("DELETE", path);
-  // 404 == already released. Not an error.
-  if (!res.ok() && res.status != 404) {
-    throwHttpError("Solari DELETE " + path, res.status, res.body);
-  }
+  // See releaseRejected(): a bare 404 is success, a 404 marked
+  // InvalidSessionId is not.
+  if (!releaseRejected(res.status, res.body)) return;
+  throwHttpError("Solari DELETE " + path, res.status, res.body);
 }
 
 ReplayUrl SessionsResource::getReplayUrl(const std::string& id) {
