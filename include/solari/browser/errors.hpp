@@ -34,6 +34,11 @@ inline constexpr const char* BrowserUnhealthy = "BrowserUnhealthy";
  * `SessionsResource::release` for why a 404 is not blanket-success there.
  */
 inline constexpr const char* InvalidSessionId = "InvalidSessionId";
+/**
+ * 503 on `POST /sessions` — a proxy tier you explicitly requested cannot be served right now. No session
+ * was created. The client does not retry it.
+ */
+inline constexpr const char* ProxyTierUnavailable = "ProxyTierUnavailable";
 }  // namespace error_code
 
 /** Every failure the SDK raises. `status` is unset for transport-level errors. */

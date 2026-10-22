@@ -66,6 +66,12 @@ std::string newIdempotencyKey();
 bool saysRetryable(const std::string& body);
 
 /**
+ * A few 503s are answers, not outages: retrying cannot change them and the caller needs the code.
+ * `ProxyTierUnavailable` (an explicitly requested proxy tier cannot be served) is one.
+ */
+bool isTerminal503(int status, const std::string& body);
+
+/**
  * Rewrite a Playwright-wire endpoint into its raw-CDP sibling by swapping the
  * `/ws/<id>` path prefix for `/cdp/<id>`. Everything else (scheme, host, query)
  * is preserved. Returns the input unchanged when it doesn't parse or the path
