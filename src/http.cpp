@@ -152,6 +152,19 @@ bool saysRetryable(const std::string& body) {
   return it != parsed.end() && it->is_boolean() && it->get<bool>();
 }
 
+bool isTerminal503(int status, const std::string& body) {
+  if (status != 503) return false;
+  nlohmann::json parsed;
+  try {
+    parsed = nlohmann::json::parse(body);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (!parsed.is_object()) return false;
+  const auto it = parsed.find("code");
+  return it != parsed.end() && it->is_string() && it->get<std::string>() == "ProxyTierUnavailable";
+}
+
 std::string deriveCdpFromWs(const std::string& wsEndpoint) {
   const auto schemeEnd = wsEndpoint.find("://");
   if (schemeEnd == std::string::npos) return wsEndpoint;
@@ -245,7 +258,7 @@ HttpResponse HttpTransport::request(const std::string& method,
         return HttpResponse{res.status, std::move(res.body)};
       }
       const bool retryThis =
-          isRetryableStatus(res.status) ||
+          (isRetryableStatus(res.status) && !isTerminal503(res.status, res.body)) ||
           (isSafeToReplay(method, idempotencyKey) && saysRetryable(res.body));
       if (!retryThis) {
         return HttpResponse{res.status, std::move(res.body)};

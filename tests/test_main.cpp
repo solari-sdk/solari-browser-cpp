@@ -475,6 +475,16 @@ TEST_CASE("only 502/503/504 are retryable") {
   CHECK_FALSE(isRetryableStatus(200));
 }
 
+TEST_CASE("a 503 ProxyTierUnavailable is terminal; an ordinary 503 is not") {
+  const std::string tier =
+      R"({"error":"Requested proxy tier 'residential' is unavailable","code":"ProxyTierUnavailable","tier":"residential"})";
+  CHECK(isTerminal503(503, tier));
+  CHECK_FALSE(isTerminal503(503, R"({"error":"No stealth pool available","kind":"stealth"})"));
+  CHECK_FALSE(isTerminal503(503, "not json"));
+  CHECK_FALSE(isTerminal503(502, tier));  // the code only means something on a 503
+  CHECK(std::string(error_code::ProxyTierUnavailable) == "ProxyTierUnavailable");
+}
+
 TEST_CASE("the wire defaults match the reference SDK") {
   CHECK(kDefaultMaxAttempts == 2);
   CHECK(kDefaultBackoffMs == 500);   // FIXED backoff, not exponential
