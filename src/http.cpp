@@ -152,8 +152,7 @@ bool saysRetryable(const std::string& body) {
   return it != parsed.end() && it->is_boolean() && it->get<bool>();
 }
 
-bool isTerminal503(int status, const std::string& body) {
-  if (status != 503) return false;
+bool isTerminal(int status, const std::string& body) {
   nlohmann::json parsed;
   try {
     parsed = nlohmann::json::parse(body);
@@ -161,6 +160,9 @@ bool isTerminal503(int status, const std::string& body) {
     return false;
   }
   if (!parsed.is_object()) return false;
+  const auto flag = parsed.find("retryable");
+  if (flag != parsed.end() && flag->is_boolean() && !flag->get<bool>()) return true;
+  if (status != 503) return false;
   const auto it = parsed.find("code");
   return it != parsed.end() && it->is_string() && it->get<std::string>() == "ProxyTierUnavailable";
 }
@@ -258,7 +260,7 @@ HttpResponse HttpTransport::request(const std::string& method,
         return HttpResponse{res.status, std::move(res.body)};
       }
       const bool retryThis =
-          (isRetryableStatus(res.status) && !isTerminal503(res.status, res.body)) ||
+          (isRetryableStatus(res.status) && !isTerminal(res.status, res.body)) ||
           (isSafeToReplay(method, idempotencyKey) && saysRetryable(res.body));
       if (!retryThis) {
         return HttpResponse{res.status, std::move(res.body)};

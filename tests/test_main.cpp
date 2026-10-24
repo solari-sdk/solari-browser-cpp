@@ -478,11 +478,15 @@ TEST_CASE("only 502/503/504 are retryable") {
 TEST_CASE("a 503 ProxyTierUnavailable is terminal; an ordinary 503 is not") {
   const std::string tier =
       R"({"error":"Requested proxy tier 'residential' is unavailable","code":"ProxyTierUnavailable","tier":"residential"})";
-  CHECK(isTerminal503(503, tier));
-  CHECK_FALSE(isTerminal503(503, R"({"error":"No stealth pool available","kind":"stealth"})"));
-  CHECK_FALSE(isTerminal503(503, "not json"));
-  CHECK_FALSE(isTerminal503(502, tier));  // the code only means something on a 503
+  CHECK(isTerminal(503, tier));
+  CHECK_FALSE(isTerminal(503, R"({"error":"No stealth pool available","kind":"stealth"})"));
+  CHECK_FALSE(isTerminal(503, "not json"));
+  CHECK_FALSE(isTerminal(502, tier));  // the code only means something on a 503
   CHECK(std::string(error_code::ProxyTierUnavailable) == "ProxyTierUnavailable");
+  // retryable:false ends the loop on any status (502 PoolResponseUnparseable).
+  CHECK(isTerminal(502, R"({"error":"Pool returned an invalid response","code":"PoolResponseUnparseable","retryable":false})"));
+  CHECK_FALSE(isTerminal(502, R"({"error":"bad gateway"})"));
+  CHECK_FALSE(isTerminal(502, R"({"retryable":true})"));
 }
 
 TEST_CASE("the wire defaults match the reference SDK") {
@@ -792,4 +796,31 @@ TEST_CASE("request() retries a retryable 409 and sends the SAME Idempotency-Key 
   // attempts minted their OWN fresh key, they could still coincidentally be
   // compared equal to each other under a degenerate implementation.
   CHECK_EQ(key1, key);
+}
+
+TEST_CASE("request() does not retry a 502 PoolResponseUnparseable (retryable:false)") {
+  // The pool may already have created the session, so a retry would leave a second one behind.
+  MockServer server({
+      {502, R"({"error":"Pool returned an invalid response","code":"PoolResponseUnparseable","retryable":false})"},
+      {201, R"({"sessionId":"s_ok","wsEndpoint":"wss://x/ws/s_ok"})"},
+  });
+
+  HttpTransport t("slr_live_test", "http://127.0.0.1:" + std::to_string(server.port), 2, 5, 2000);
+  HttpResponse res = t.request("POST", "/sessions", nlohmann::json::object(), newIdempotencyKey());
+
+  CHECK(res.status == 502);
+  CHECK(server.requests().size() == 1);
+}
+
+TEST_CASE("request() still retries a bare 502") {
+  MockServer server({
+      {502, R"({"error":"bad gateway"})"},
+      {201, R"({"sessionId":"s_ok","wsEndpoint":"wss://x/ws/s_ok"})"},
+  });
+
+  HttpTransport t("slr_live_test", "http://127.0.0.1:" + std::to_string(server.port), 2, 5, 2000);
+  HttpResponse res = t.request("POST", "/sessions", nlohmann::json::object(), newIdempotencyKey());
+
+  CHECK(res.status == 201);
+  CHECK(server.requests().size() == 2);
 }
