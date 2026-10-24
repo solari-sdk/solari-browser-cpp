@@ -236,7 +236,7 @@ try {
 }
 ```
 
-`status` is unset for transport-level failures (DNS, connect, exhausted attempts).
+`status` is unset for transport-level failures (DNS, connect, retries exhausted on transport errors).
 
 ## Testing
 

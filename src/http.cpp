@@ -262,7 +262,9 @@ HttpResponse HttpTransport::request(const std::string& method,
       const bool retryThis =
           (isRetryableStatus(res.status) && !isTerminal(res.status, res.body)) ||
           (isSafeToReplay(method, idempotencyKey) && saysRetryable(res.body));
-      if (!retryThis) {
+      // Out of attempts: hand the last response back so the caller maps its status and
+      // `code` like any other error, not a status-less "exhausted".
+      if (!retryThis || attempt == maxAttempts_) {
         return HttpResponse{res.status, std::move(res.body)};
       }
       lastErr = "Solari " + method + " " + path + ": " + std::to_string(res.status);
