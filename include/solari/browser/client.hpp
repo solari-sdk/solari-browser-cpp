@@ -9,6 +9,7 @@
 #pragma once
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,14 @@ bool releaseRejected(int status, const std::string& body);
  * out. Throws SolariError when `sessionId` / `wsEndpoint` are missing.
  */
 Session parseSessionResponse(const nlohmann::json& body);
+
+/**
+ * The wire value for the gateway's `timeoutSeconds`: `sessionTimeoutMs` rounded up
+ * to whole seconds, else the deprecated `legacySeconds`. Returns 0 for "omit".
+ * Throws SolariError for a negative value or one too large for the wire field.
+ */
+int sessionTimeoutSeconds(const std::optional<long long>& sessionTimeoutMs,
+                          const std::optional<int>& legacySeconds);
 
 /**
  * Render the gateway's list filter grammar: `user_metadata['key']:'value'` clauses

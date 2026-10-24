@@ -51,6 +51,16 @@ nothing is lost by doing so.
 `session.wsEndpoint` (the Playwright wire protocol) is returned for completeness
 but is only usable by a Playwright client — not by a raw CDP client.
 
+### Durations are milliseconds
+
+Every duration option is an integer in milliseconds (`timeoutMs`, `backoffMs`,
+`sessionTimeoutMs`, `probeTimeoutMs`, `callTimeoutMs`). `sessionTimeoutMs` is rounded
+up (1001 ms is 2 s); zero or unset leaves the plan maximum and a negative value
+throws. **Deprecated:** `CreateSessionOptions::timeoutSeconds` still works; use
+`sessionTimeoutMs` (it is documented as deprecated rather than marked
+`[[deprecated]]`, because GCC then warns on every `CreateSessionOptions` you construct). When both are set the new one wins. It will not
+be removed before the next major release.
+
 ### One-call `launch()` (needs `SOLARI_WITH_WS`)
 
 ```cpp
@@ -247,8 +257,8 @@ Two notes on the session response:
 - **`sessions.list()`** pages with `ListSessionsOptions::limit` / `cursor` and
   filters with `metadata` (string values matched against `userMetadata`). Rows never
   carry the websocket endpoints (they are bearer capabilities): call `get(id)`.
-- **`CreateSessionOptions`** also takes `timeoutSeconds` (at least 60),
-  `keepAlive` (hold the session if the client drops, until its deadline or release)
+- **`CreateSessionOptions`** also takes `sessionTimeoutMs` (milliseconds; rounded up
+  to whole seconds for the gateway, which refuses under 60 s), `keepAlive` (hold the session if the client drops, until its deadline or release)
   and `userMetadata` (a JSON object stored with the session).
 
 ## Errors
