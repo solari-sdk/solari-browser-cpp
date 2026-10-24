@@ -43,6 +43,13 @@ CurlResult doCurl(const std::string& method, const std::string& url,
   }
   struct curl_slist* headers = nullptr;
   for (const auto& h : headerLines) headers = curl_slist_append(headers, h.c_str());
+  // A body-less POST/PUT/PATCH carries no Content-Length unless we say so, and the
+  // hosted gateway's load balancer answers an HTTP/1.1 request like that with
+  // "411 Length Required". (Over HTTP/2 it is accepted, so this only shows up where
+  // libcurl was built without HTTP/2 or the connection is forced to 1.1.)
+  if (!hasBody && (method == "POST" || method == "PUT" || method == "PATCH")) {
+    headers = curl_slist_append(headers, "Content-Length: 0");
+  }
 
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
