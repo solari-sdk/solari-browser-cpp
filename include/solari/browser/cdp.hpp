@@ -11,6 +11,7 @@
 // Compiled only when SOLARI_WITH_WS=ON.
 #pragma once
 #ifdef SOLARI_WITH_WS
+#include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <map>
@@ -55,6 +56,9 @@ class CdpConnection {
   void close();
   bool connected() const;
 
+  /** Change the per-command reply timeout for subsequent `send()` calls. */
+  void setCallTimeoutMs(long callTimeoutMs);
+
   /**
    * Send one CDP command and block for its reply.
    * Returns the `result` object. Throws SolariError on a protocol `error`, on
@@ -83,7 +87,7 @@ class CdpConnection {
   void failAll(const std::string& reason);
 
   std::string endpoint_;
-  long callTimeoutMs_;
+  std::atomic<long> callTimeoutMs_;
   // shared_ptr, not unique_ptr: `send()` copies it under the lock so a
   // concurrent `close()` can't free the socket out from under an in-flight send.
   std::shared_ptr<ix::WebSocket> ws_;

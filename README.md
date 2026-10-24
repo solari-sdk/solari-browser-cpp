@@ -3,19 +3,25 @@
 A C++17 binding for the Solari **browser** gateway. It mirrors the control-plane
 half of `@solarisdk/browser`: a `solari::browser::Client` with
 
-- `.sessions` — `create` / `get` / `release` / `getReplayUrl` / `downloadReplay`
+- `.sessions` — `create` / `get` / `list` / `release` / `getReplayUrl` / `downloadReplay`
 - `.profiles` — `list` / `create` / `remove` / `save`
 - `.proxyCountries()` — supported egress countries + whether proxying is configured
+- `.launch()` — create + raw-CDP connect + health probe + release on close (needs
+  `SOLARI_WITH_WS`, see below)
+
+Feature coverage across all five languages is on the
+[SDK feature matrix](https://docs.getsolari.com/sdk-capabilities).
 
 The API is **blocking and synchronous**; every call is a REST round-trip via
 libcurl.
 
-## Scope: control plane only — there is no `launch()`
+## Scope: control plane plus a raw-CDP `launch()`
 
 The TypeScript SDK's `launch()` returns a live Playwright `Browser`. **That is not
 portable to C++**: Playwright has no C++ client, and neither does Puppeteer. This
-binding therefore stops where the control plane stops — it creates the session and
-hands back `Session::cdpEndpoint`, and you drive the browser from there.
+binding creates the session and hands back `Session::cdpEndpoint`, and you drive
+the browser from there. `client.launch()` (below) is the raw-CDP counterpart: it
+returns a connected `CdpConnection`, not a `Browser`.
 
 Two other deliberate differences from the TS SDK:
 
@@ -44,6 +50,29 @@ nothing is lost by doing so.
 
 `session.wsEndpoint` (the Playwright wire protocol) is returned for completeness
 but is only usable by a Playwright client — not by a raw CDP client.
+
+### One-call `launch()` (needs `SOLARI_WITH_WS`)
+
+```cpp
+solari::browser::LaunchOptions lo;
+lo.create.stealth = true;
+lo.retries = 2;                       // extra attempts on a transient failure (default 0)
+auto launched = client.launch(lo);    // create + connect + seed cookies + probe
+
+auto version = launched->cdp().send("Browser.getVersion");
+// ... drive it with launched->cdp() ...
+launched->close();                    // closes the socket and releases the session
+```
+
+`launch()` creates the session, opens a `CdpConnection` to it, seeds the cookies of
+an attached profile (best effort), and, when `retries > 0` or `lo.probe = true`,
+sends `Browser.getVersion` within `probeTimeoutMs` (default 2000) to confirm the
+browser answers. A session that fails after it was created is released before the
+next attempt or the final throw. Only transient failures are retried: no HTTP
+status, or a 5xx other than `PoolResponseUnparseable` (the pool may already have
+created that session). `LaunchedSession`'s destructor releases the session too
+(best effort, never throws), so leaving scope cannot leak a pool slot; the `Client`
+must outlive it.
 
 ### The `CdpConnection` escape hatch (optional)
 
@@ -211,12 +240,16 @@ Two notes on the session response:
 - **`storageState` arrives as a presigned URL** (`storageStateUrl.url`), which
   `sessions.create()` fetches for you with an 8s timeout.
 
-> ⚠️ `sessions.get()` returns raw JSON and **currently 404s in production**: the
-> gateway proxies `GET /sessions/:id` straight to the pool host, which implements
-> no such route (only `POST /sessions`, `DELETE /sessions/:id`,
-> `PUT /sessions/:id/expires`, `GET /sessions`). It's wired up here for when the
-> pool grows the route; the shape is whatever the pool returns, hence raw JSON.
-> The TS SDK doesn't expose this endpoint at all.
+- **`sessions.get()` returns raw JSON**: `id`, `status`, `kind`, `org`, `createdAt`,
+  `expiresAt`, `userMetadata` when set, and `wsEndpoint` / `cdpEndpoint` while the
+  session is active. It is left raw so a gateway field addition never forces an
+  SDK bump.
+- **`sessions.list()`** pages with `ListSessionsOptions::limit` / `cursor` and
+  filters with `metadata` (string values matched against `userMetadata`). Rows never
+  carry the websocket endpoints (they are bearer capabilities): call `get(id)`.
+- **`CreateSessionOptions`** also takes `timeoutSeconds` (at least 60),
+  `keepAlive` (hold the session if the client drops, until its deadline or release)
+  and `userMetadata` (a JSON object stored with the session).
 
 ## Errors
 

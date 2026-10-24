@@ -7,10 +7,12 @@
 // back `Session::cdpEndpoint`. Drive it with a third-party CDP client (see
 // README), or with the optional `CdpConnection` escape hatch (SOLARI_WITH_WS).
 #pragma once
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "solari/browser/errors.hpp"
 #include "solari/browser/http.hpp"
 #include "solari/browser/types.hpp"
 
@@ -48,6 +50,16 @@ bool releaseRejected(int status, const std::string& body);
  */
 Session parseSessionResponse(const nlohmann::json& body);
 
+/**
+ * Render the gateway's list filter grammar: `user_metadata['key']:'value'` clauses
+ * joined by `AND`, in key order. Throws SolariError for a pair it cannot express
+ * (empty or over-long key, a single quote, more than 10 pairs) so nothing is sent.
+ */
+std::string buildMetadataFilter(const std::map<std::string, std::string>& metadata);
+
+/** Parse a `GET /sessions` body. Rows without an `id` are skipped. */
+SessionList parseSessionList(const nlohmann::json& body);
+
 /** Parse `GET /sessions/:id/replay-url` (expiresInSeconds -> 0, contentEncoding -> "gzip"). */
 ReplayUrl parseReplayUrl(const nlohmann::json& body);
 
@@ -64,6 +76,10 @@ SaveProfileResult parseSaveResult(const nlohmann::json& body);
 ProxyCountries parseProxyCountries(const nlohmann::json& body);
 
 class Client;
+#ifdef SOLARI_WITH_WS
+class CdpConnection;
+class LaunchedSession;
+#endif
 
 /** `client.sessions.*` */
 class SessionsResource {
@@ -74,14 +90,19 @@ class SessionsResource {
   Session create(const CreateSessionOptions& opts = {});
 
   /**
-   * `GET /sessions/:id`, returned as raw JSON.
-   *
-   * NOTE: the gateway proxies this straight through to the pool host, which
-   * currently implements no `GET /sessions/:id` route — so this reliably 404s
-   * today (SolariError, status 404). Kept for completeness; the shape is
-   * whatever the pool eventually returns, hence raw JSON.
+   * `GET /sessions/:id`, returned as raw JSON: `id`, `status`, `kind`, `org`,
+   * `createdAt`, `expiresAt`, `userMetadata` when set, and `wsEndpoint` /
+   * `cdpEndpoint` while the session is active. Left raw so a gateway field
+   * addition never forces an SDK bump.
    */
   Json get(const std::string& id);
+
+  /**
+   * `GET /sessions` — one page of the organisation's sessions. Rows never carry
+   * the websocket endpoints; call `get(id)` for those. Page with
+   * `ListSessionsOptions::cursor`.
+   */
+  SessionList list(const ListSessionsOptions& opts = {});
 
   /** `DELETE /sessions/:id`. Idempotent: a 404 is success (already gone). */
   void release(const std::string& id);
@@ -132,8 +153,60 @@ class Client {
 
   HttpTransport& http() { return *http_; }
 
+#ifdef SOLARI_WITH_WS
+  /**
+   * Create a session, open a raw-CDP connection to it, seed an attached
+   * profile's cookies, health-probe it and hand it back. Retries the whole
+   * sequence `opts.retries` more times when the failure looks transient. A
+   * session that fails after it was created is released before the next attempt
+   * or the final throw. See `LaunchedSession` for what comes back.
+   *
+   * This is the raw-CDP counterpart of the TypeScript `launch()`: there is no
+   * Playwright for C++, so you get a `CdpConnection`, not a `Browser`.
+   */
+  std::unique_ptr<LaunchedSession> launch(const LaunchOptions& opts = {});
+#endif
+
  private:
   std::shared_ptr<HttpTransport> http_;
 };
+
+#ifdef SOLARI_WITH_WS
+/**
+ * A launched session: the `Session`, a connected `CdpConnection`, and the duty to
+ * release it. `close()` closes the socket and releases the session; the
+ * destructor does the same best-effort (it never throws), so leaving scope
+ * cannot leak a pool slot. The `Client` must outlive it.
+ */
+class LaunchedSession {
+ public:
+  LaunchedSession(Client* client, Session session, std::unique_ptr<CdpConnection> cdp);
+  ~LaunchedSession();
+  LaunchedSession(const LaunchedSession&) = delete;
+  LaunchedSession& operator=(const LaunchedSession&) = delete;
+
+  const Session& session() const { return session_; }
+  CdpConnection& cdp() { return *cdp_; }
+
+  /** Close the CDP socket and release the session. Idempotent once it succeeds;
+   *  if the release fails it throws and a second call retries it. */
+  void close();
+
+ private:
+  Client* client_;
+  Session session_;
+  std::unique_ptr<CdpConnection> cdp_;
+  bool released_ = false;
+};
+
+/** Whether a launch failure is worth another attempt: no HTTP status (transport,
+ *  connect, protocol) or a 5xx, except `PoolResponseUnparseable` (the pool may
+ *  already have created the session, so a fresh create would make a second). */
+bool isTransientLaunchError(const SolariError& e);
+
+/** Playwright-shaped cookies from a profile's storage state, as the `cookies`
+ *  array for CDP `Storage.setCookies`. Entries without a name and value are skipped. */
+nlohmann::json cookiesForCdp(const StorageState& state);
+#endif
 
 }  // namespace solari::browser

@@ -850,3 +850,218 @@ TEST_CASE("request() still throws 'exhausted' when every attempt is a transport 
     CHECK_FALSE(e.status.has_value());
   }
 }
+
+// ---------------------------------------------------------------------------
+// timeoutSeconds / keepAlive / userMetadata, list, launch
+// ---------------------------------------------------------------------------
+TEST_CASE("buildCreateBody sends timeoutSeconds, keepAlive and userMetadata, and omits them when unset") {
+  CreateSessionOptions o;
+  o.timeoutSeconds = 120;
+  o.keepAlive = true;
+  o.userMetadata = json{{"job", "j-7"}};
+  json body = buildCreateBody(o);
+  CHECK(body["timeoutSeconds"] == 120);
+  CHECK(body["keepAlive"] == true);
+  CHECK(body["userMetadata"]["job"] == "j-7");
+
+  CHECK(buildCreateBody(CreateSessionOptions{}).empty());
+}
+
+TEST_CASE("parseSessionResponse echoes userMetadata") {
+  Session s = parseSessionResponse(json::parse(
+      R"({"sessionId":"s1","wsEndpoint":"wss://gw/ws/s1","userMetadata":{"job":"j-7"}})"));
+  REQUIRE(s.userMetadata.has_value());
+  CHECK((*s.userMetadata)["job"] == "j-7");
+  CHECK_FALSE(parseSessionResponse(json::parse(R"({"sessionId":"s1","wsEndpoint":"wss://gw/ws/s1"})"))
+                  .userMetadata.has_value());
+}
+
+TEST_CASE("buildMetadataFilter renders sorted AND clauses and refuses what the grammar cannot say") {
+  CHECK(buildMetadataFilter({{"team", "x"}, {"env", "prod"}}) ==
+        "user_metadata['env']:'prod' AND user_metadata['team']:'x'");
+  CHECK_THROWS_AS(buildMetadataFilter({{"k", "it's"}}), SolariError);
+  CHECK_THROWS_AS(buildMetadataFilter({{"k'", "v"}}), SolariError);
+  CHECK_THROWS_AS(buildMetadataFilter({{"", "v"}}), SolariError);
+  std::map<std::string, std::string> many;
+  for (int i = 0; i < 11; i++) many["k" + std::to_string(i)] = "v";
+  CHECK_THROWS_AS(buildMetadataFilter(many), SolariError);
+}
+
+TEST_CASE("parseSessionList reads rows and the cursor, and skips rows without an id") {
+  SessionList l = parseSessionList(json::parse(
+      R"({"sessions":[{"id":"s1","status":"active","kind":"fast","createdAt":"c","expiresAt":"e","userMetadata":{"team":"x"}},{"status":"orphan"},{"id":"s2","status":"released"}],"nextCursor":"cur2"})"));
+  REQUIRE(l.sessions.size() == 2);
+  CHECK(l.sessions[0].id == "s1");
+  CHECK(*l.sessions[0].kind == "fast");
+  CHECK((*l.sessions[0].userMetadata)["team"] == "x");
+  CHECK(l.sessions[1].status == "released");
+  CHECK(l.nextCursor == "cur2");
+  SessionList empty = parseSessionList(json::parse(R"({"sessions":[]})"));
+  CHECK(empty.sessions.empty());
+  CHECK_FALSE(empty.nextCursor.has_value());
+}
+
+TEST_CASE("sessions.list sends paging and the metadata filter") {
+  MockServer server({
+      {200, R"({"sessions":[{"id":"s1","status":"active"}],"nextCursor":"cur2"})"},
+      {200, R"({"sessions":[]})"},
+  });
+  ClientOptions co;
+  co.apiKey = "slr_live_test";
+  co.baseUrl = "http://127.0.0.1:" + std::to_string(server.port);
+  Client client(co);
+
+  ListSessionsOptions o;
+  o.limit = 2;
+  o.cursor = "cur1";
+  o.metadata = {{"team", "x"}, {"env", "prod"}};
+  SessionList page = client.sessions.list(o);
+  CHECK(page.sessions.size() == 1);
+  CHECK(page.nextCursor == "cur2");
+
+  client.sessions.list();  // default options: a bare path
+
+  const auto reqs = server.requests();
+  REQUIRE(reqs.size() == 2);
+  const std::string line1 = reqs[0].substr(0, reqs[0].find("\r\n"));
+  CHECK(line1.rfind("GET /sessions?limit=2&cursor=cur1&q=", 0) == 0);
+  CHECK(line1.find("user_metadata%5B'env'%5D%3A'prod'%20AND%20user_metadata%5B'team'%5D%3A'x'") !=
+        std::string::npos);
+  CHECK(reqs[1].substr(0, reqs[1].find("\r\n")) == "GET /sessions HTTP/1.1");
+}
+
+TEST_CASE("sessions.list refuses an unexpressible filter without sending a request") {
+  MockServer server({{200, R"({"sessions":[]})"}});
+  ClientOptions co;
+  co.apiKey = "slr_live_test";
+  co.baseUrl = "http://127.0.0.1:" + std::to_string(server.port);
+  Client client(co);
+  ListSessionsOptions o;
+  o.metadata = {{"k", "it's"}};
+  CHECK_THROWS_AS(client.sessions.list(o), SolariError);
+  CHECK(server.requests().empty());
+}
+
+#ifdef SOLARI_WITH_WS
+#include <ixwebsocket/IXWebSocketServer.h>
+
+TEST_CASE("cookiesForCdp maps Playwright cookies and skips what CDP cannot take") {
+  json state = json::parse(R"({"cookies":[
+    {"name":"a","value":"1","domain":".x.com","path":"/","expires":1900000000.5,"httpOnly":true,"secure":true,"sameSite":"Lax"},
+    {"name":"s","value":"2","domain":"y.com","expires":-1,"sameSite":"bogus"},
+    {"name":"nameonly"},
+    "junk"]})");
+  json out = cookiesForCdp(state);
+  REQUIRE(out.size() == 2);
+  CHECK(out[0]["domain"] == ".x.com");
+  CHECK(out[0]["expires"] == 1900000000.5);
+  CHECK(out[0]["httpOnly"] == true);
+  CHECK(out[0]["sameSite"] == "Lax");
+  CHECK_FALSE(out[1].contains("expires"));   // -1 is a session cookie
+  CHECK_FALSE(out[1].contains("sameSite"));  // unknown value dropped
+  CHECK(cookiesForCdp(json(nullptr)).empty());
+}
+
+TEST_CASE("isTransientLaunchError retries transport and 5xx but not 4xx or an unparseable pool answer") {
+  CHECK(isTransientLaunchError(SolariError("net")));
+  CHECK(isTransientLaunchError(SolariError("x", 503)));
+  CHECK_FALSE(isTransientLaunchError(SolariError("x", 400)));
+  CHECK_FALSE(isTransientLaunchError(SolariError("x", 429)));
+  CHECK_FALSE(isTransientLaunchError(SolariError("x", 502, std::string("PoolResponseUnparseable"))));
+}
+
+namespace {
+
+int freeLoopbackPort() {
+  int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  sockaddr_in a{};
+  a.sin_family = AF_INET;
+  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  a.sin_port = 0;
+  ::bind(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+  socklen_t len = sizeof(a);
+  ::getsockname(fd, reinterpret_cast<sockaddr*>(&a), &len);
+  const int port = ntohs(a.sin_port);
+  ::close(fd);
+  return port;
+}
+
+// A loopback CDP endpoint: answers every command with an empty result and records the methods.
+struct FakeCdp {
+  int port = freeLoopbackPort();
+  ix::WebSocketServer server{port, "127.0.0.1"};
+  std::mutex mu;
+  std::vector<std::string> methods;
+
+  FakeCdp() {
+    server.setOnClientMessageCallback(
+        [this](std::shared_ptr<ix::ConnectionState>, ix::WebSocket& ws, const ix::WebSocketMessagePtr& msg) {
+          if (msg->type != ix::WebSocketMessageType::Message) return;
+          json req = json::parse(msg->str, nullptr, false);
+          if (!req.is_object()) return;
+          {
+            std::lock_guard<std::mutex> lk(mu);
+            methods.push_back(req.value("method", ""));
+          }
+          ws.send(json{{"id", req["id"]}, {"result", json::object()}}.dump());
+        });
+    auto res = server.listen();
+    REQUIRE(res.first);
+    server.start();
+  }
+  ~FakeCdp() { server.stop(); }
+  std::string url() const { return "ws://127.0.0.1:" + std::to_string(port) + "/cdp/s1"; }
+  std::vector<std::string> seen() {
+    std::lock_guard<std::mutex> lk(mu);
+    return methods;
+  }
+};
+
+}  // namespace
+
+TEST_CASE("launch creates, connects, seeds cookies, probes, and close() releases the session") {
+  FakeCdp cdp;
+  const std::string created = R"({"sessionId":"s1","wsEndpoint":"wss://gw/ws/s1","cdpEndpoint":")" + cdp.url() +
+                              R"(","storageState":{"cookies":[{"name":"a","value":"1","domain":"x.com"}]}})";
+  MockServer http({{201, created}, {204, ""}});
+  ClientOptions co;
+  co.apiKey = "slr_live_test";
+  co.baseUrl = "http://127.0.0.1:" + std::to_string(http.port);
+  Client client(co);
+
+  LaunchOptions lo;
+  lo.probe = true;
+  auto launched = client.launch(lo);
+  CHECK(launched->session().id == "s1");
+  CHECK(launched->cdp().connected());
+
+  const auto methods = cdp.seen();
+  REQUIRE(methods.size() == 2);
+  CHECK(methods[0] == "Storage.setCookies");
+  CHECK(methods[1] == "Browser.getVersion");
+
+  CHECK(http.requests().size() == 1);  // only the create so far
+  launched->close();
+  launched->close();  // idempotent once it succeeded
+  const auto reqs = http.requests();
+  REQUIRE(reqs.size() == 2);
+  CHECK(reqs[1].rfind("DELETE /sessions/s1 ", 0) == 0);
+}
+
+TEST_CASE("launch releases a session it could not connect to, then throws") {
+  // Nothing listens on port 1, so the CDP connect fails; the created session must be released.
+  MockServer http({
+      {201, R"({"sessionId":"s1","wsEndpoint":"wss://gw/ws/s1","cdpEndpoint":"ws://127.0.0.1:1/cdp/s1"})"},
+      {204, ""},
+  });
+  ClientOptions co;
+  co.apiKey = "slr_live_test";
+  co.baseUrl = "http://127.0.0.1:" + std::to_string(http.port);
+  Client client(co);
+
+  CHECK_THROWS_AS(client.launch(), SolariError);
+  const auto reqs = http.requests();
+  REQUIRE(reqs.size() == 2);
+  CHECK(reqs[1].rfind("DELETE /sessions/s1 ", 0) == 0);
+}
+#endif  // SOLARI_WITH_WS

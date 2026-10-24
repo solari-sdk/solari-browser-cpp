@@ -66,6 +66,9 @@ nlohmann::json buildCreateBody(const CreateSessionOptions& opts) {
   if (opts.stealth) body["stealth"] = true;
   if (opts.captcha) body["captcha"] = true;
   if (opts.proxy) body["proxy"] = proxyToJson(*opts.proxy);
+  if (opts.timeoutSeconds) body["timeoutSeconds"] = *opts.timeoutSeconds;
+  if (opts.keepAlive) body["keepAlive"] = true;
+  if (opts.userMetadata) body["userMetadata"] = *opts.userMetadata;
   return body;
 }
 
@@ -99,7 +102,56 @@ Session parseSessionResponse(const nlohmann::json& data) {
     p.tier = jsonStr(*px, "tier");
     s.proxy = std::move(p);
   }
+
+  auto um = data.find("userMetadata");
+  if (um != data.end() && um->is_object()) s.userMetadata = *um;
   return s;
+}
+
+namespace {
+constexpr size_t kMaxMetadataClauses = 10;
+constexpr size_t kMaxMetadataKeyLen = 128;
+}  // namespace
+
+std::string buildMetadataFilter(const std::map<std::string, std::string>& metadata) {
+  if (metadata.size() > kMaxMetadataClauses) {
+    throw SolariError("Solari: at most " + std::to_string(kMaxMetadataClauses) +
+                      " metadata filter pairs");
+  }
+  std::string out;
+  for (const auto& [k, v] : metadata) {  // std::map iterates in key order
+    if (k.empty() || k.size() > kMaxMetadataKeyLen || k.find('\'') != std::string::npos ||
+        v.find('\'') != std::string::npos) {
+      throw SolariError("Solari: metadata filter key \"" + k +
+                        "\" or its value cannot be expressed (1-128 characters, no single quote)");
+    }
+    if (!out.empty()) out += " AND ";
+    out += "user_metadata['" + k + "']:'" + v + "'";
+  }
+  return out;
+}
+
+SessionList parseSessionList(const nlohmann::json& data) {
+  SessionList out;
+  if (!data.is_object()) return out;
+  auto rows = data.find("sessions");
+  if (rows != data.end() && rows->is_array()) {
+    for (const auto& row : *rows) {
+      const auto id = jsonStr(row, "id");
+      if (!id || id->empty()) continue;
+      SessionSummary s;
+      s.id = *id;
+      s.status = jsonStr(row, "status").value_or("");
+      s.kind = jsonStr(row, "kind");
+      s.createdAt = jsonStr(row, "createdAt");
+      s.expiresAt = jsonStr(row, "expiresAt");
+      auto um = row.find("userMetadata");
+      if (um != row.end() && um->is_object()) s.userMetadata = *um;
+      out.sessions.push_back(std::move(s));
+    }
+  }
+  if (auto c = jsonStr(data, "nextCursor"); c && !c->empty()) out.nextCursor = c;
+  return out;
 }
 
 ReplayUrl parseReplayUrl(const nlohmann::json& data) {
@@ -183,6 +235,25 @@ Json SessionsResource::get(const std::string& id) {
   HttpResponse res = client_->http().request("GET", path);
   if (!res.ok()) throwHttpError("Solari GET " + path, res.status, res.body);
   return parseJsonBody(res.body, "session");
+}
+
+SessionList SessionsResource::list(const ListSessionsOptions& opts) {
+  std::string path = "/sessions";
+  std::string sep = "?";
+  if (opts.limit && *opts.limit > 0) {
+    path += sep + "limit=" + std::to_string(*opts.limit);
+    sep = "&";
+  }
+  if (opts.cursor && !opts.cursor->empty()) {
+    path += sep + "cursor=" + encodeURIComponent(*opts.cursor);
+    sep = "&";
+  }
+  if (!opts.metadata.empty()) {
+    path += sep + "q=" + encodeURIComponent(buildMetadataFilter(opts.metadata));
+  }
+  HttpResponse res = client_->http().request("GET", path);
+  if (!res.ok()) throwHttpError("Solari GET /sessions", res.status, res.body);
+  return parseSessionList(parseJsonBody(res.body, "session list"));
 }
 
 bool releaseRejected(int status, const std::string& body) {
