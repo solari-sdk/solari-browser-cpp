@@ -2,6 +2,7 @@
 // `sdk/src/index.ts`. Loosely-typed blobs (storageState, the full profile row)
 // stay as raw nlohmann::json so a gateway field addition never forces an SDK bump.
 #pragma once
+#include <map>
 #include <optional>
 #include <string>
 #include <variant>
@@ -88,6 +89,15 @@ struct CreateSessionOptions {
   bool captcha = false;
   /** Managed proxy egress. Requires `stealth`. */
   std::optional<ProxySpec> proxy;
+  /** End the session earlier than the plan maximum. Unset leaves the plan maximum;
+   *  the gateway refuses anything under 60. */
+  std::optional<int> timeoutSeconds;
+  /** Hold the session after the client disconnects, until its deadline
+   *  (`timeoutSeconds`, else an hour, never past the plan maximum) or until it is
+   *  released, so a dropped client can reconnect. */
+  bool keepAlive = false;
+  /** Free-form JSON object stored with the session and returned by `get` and `list`. */
+  std::optional<Json> userMetadata;
 };
 
 /**
@@ -114,6 +124,55 @@ struct Session {
   std::optional<StorageState> storageState;
   /** Set only when a managed proxy was requested. */
   std::optional<ResolvedProxyConfig> proxy;
+  /** Echo of the `userMetadata` sent at create; unset when none was sent. */
+  std::optional<Json> userMetadata;
+};
+
+/**
+ * One row of `sessions.list()`. It never carries the websocket endpoints (they are
+ * bearer capabilities): use `sessions.get(id)` for a single session's.
+ */
+struct SessionSummary {
+  std::string id;
+  std::string status;
+  std::optional<std::string> kind;
+  std::optional<std::string> createdAt;
+  std::optional<std::string> expiresAt;
+  std::optional<Json> userMetadata;
+};
+
+/** One page of `sessions.list()`. */
+struct SessionList {
+  std::vector<SessionSummary> sessions;
+  /** Unset on the last page; pass it as `ListSessionsOptions::cursor`. */
+  std::optional<std::string> nextCursor;
+};
+
+/** Filters and paging for `sessions.list()`. The default lists the first page. */
+struct ListSessionsOptions {
+  /** Page size; unset uses the gateway default. */
+  std::optional<int> limit;
+  /** Continue from a previous page's `nextCursor`. */
+  std::optional<std::string> cursor;
+  /** Keep sessions whose `userMetadata` has all these string values (at most 10
+   *  pairs; keys and values cannot contain a single quote). */
+  std::map<std::string, std::string> metadata;
+};
+
+/** Options for `client.launch()` (needs SOLARI_WITH_WS). */
+struct LaunchOptions {
+  /** What to create the session with. */
+  CreateSessionOptions create;
+  /** Additional attempts after the first failure. Default 0. */
+  int retries = 0;
+  /** Probe the connected browser before returning. Unset means on when `retries > 0`. */
+  std::optional<bool> probe;
+  /** Hard bound on the probe, in ms. Default 2000. */
+  long probeTimeoutMs = 2000;
+  /** Reply timeout for later CDP commands, in ms. Default 30000. */
+  long callTimeoutMs = 30000;
+  /** Fixed pause between attempts, in ms. Default 250. */
+  long retryBackoffMs = 250;
 };
 
 /** A stored browser profile. `raw` is the full row the platform returned. */

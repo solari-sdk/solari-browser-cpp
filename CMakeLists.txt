@@ -41,7 +41,7 @@ if(SOLARI_WITH_WS)
     GIT_TAG v11.4.5
   )
   FetchContent_MakeAvailable(ixwebsocket)
-  list(APPEND SOLARI_BROWSER_SOURCES src/cdp.cpp)
+  list(APPEND SOLARI_BROWSER_SOURCES src/cdp.cpp src/launch.cpp)
 endif()
 
 add_library(solari_browser ${SOLARI_BROWSER_SOURCES})

@@ -23,6 +23,8 @@ void CdpConnection::onEvent(std::function<void(const nlohmann::json&)> handler) 
   onEvent_ = std::move(handler);
 }
 
+void CdpConnection::setCallTimeoutMs(long callTimeoutMs) { callTimeoutMs_ = callTimeoutMs; }
+
 bool CdpConnection::connected() const {
   std::lock_guard<std::mutex> lk(m_);
   return opened_;
