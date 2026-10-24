@@ -66,10 +66,13 @@ std::string newIdempotencyKey();
 bool saysRetryable(const std::string& body);
 
 /**
- * A few 503s are answers, not outages: retrying cannot change them and the caller needs the code.
- * `ProxyTierUnavailable` (an explicitly requested proxy tier cannot be served) is one.
+ * Some 5xx are answers, not outages: retrying cannot change them and the caller needs the code.
+ * The gateway says so itself with `retryable: false` (502 `PoolResponseUnparseable`: the session may
+ * already exist, so a retry creates a second one; 503 `EgressBlockPeekUnsupportedOnFlavor`).
+ * A 503 `ProxyTierUnavailable` (an explicitly requested proxy tier cannot be served) is also terminal,
+ * whatever its flag.
  */
-bool isTerminal503(int status, const std::string& body);
+bool isTerminal(int status, const std::string& body);
 
 /**
  * Rewrite a Playwright-wire endpoint into its raw-CDP sibling by swapping the
