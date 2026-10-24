@@ -824,3 +824,29 @@ TEST_CASE("request() still retries a bare 502") {
   CHECK(res.status == 201);
   CHECK(server.requests().size() == 2);
 }
+
+TEST_CASE("request() returns the last 5xx with its body once the attempts run out") {
+  MockServer server({
+      {503, R"({"error":"unhealthy","code":"BrowserUnhealthy"})"},
+      {503, R"({"error":"unhealthy","code":"BrowserUnhealthy"})"},
+  });
+
+  HttpTransport t("slr_live_test", "http://127.0.0.1:" + std::to_string(server.port), 2, 5, 2000);
+  HttpResponse res = t.request("POST", "/sessions", nlohmann::json::object(), newIdempotencyKey());
+
+  CHECK(res.status == 503);
+  CHECK(res.body.find("BrowserUnhealthy") != std::string::npos);
+  CHECK(server.requests().size() == 2);
+}
+
+TEST_CASE("request() still throws 'exhausted' when every attempt is a transport failure") {
+  // Nothing listens on port 1.
+  HttpTransport t("slr_live_test", "http://127.0.0.1:1", 2, 5, 2000);
+  try {
+    t.request("GET", "/profiles", std::nullopt, "");
+    FAIL("expected SolariError");
+  } catch (const SolariError& e) {
+    CHECK(std::string(e.what()).find("exhausted 2 attempts") != std::string::npos);
+    CHECK_FALSE(e.status.has_value());
+  }
+}
