@@ -856,7 +856,7 @@ TEST_CASE("request() still throws 'exhausted' when every attempt is a transport 
 // ---------------------------------------------------------------------------
 TEST_CASE("buildCreateBody sends timeoutSeconds, keepAlive and userMetadata, and omits them when unset") {
   CreateSessionOptions o;
-  o.timeoutSeconds = 120;
+  o.sessionTimeoutMs = 120000;
   o.keepAlive = true;
   o.userMetadata = json{{"job", "j-7"}};
   json body = buildCreateBody(o);
@@ -1065,3 +1065,37 @@ TEST_CASE("launch releases a session it could not connect to, then throws") {
   CHECK(reqs[1].rfind("DELETE /sessions/s1 ", 0) == 0);
 }
 #endif  // SOLARI_WITH_WS
+
+TEST_CASE("sessionTimeoutSeconds rounds up to whole seconds and prefers the new name") {
+  using O = std::optional<long long>;
+  using L = std::optional<int>;
+  CHECK(sessionTimeoutSeconds(std::nullopt, std::nullopt) == 0);
+  CHECK(sessionTimeoutSeconds(O{0}, std::nullopt) == 0);
+  CHECK(sessionTimeoutSeconds(O{1000}, std::nullopt) == 1);
+  CHECK(sessionTimeoutSeconds(O{1001}, std::nullopt) == 2);
+  CHECK(sessionTimeoutSeconds(O{59999}, std::nullopt) == 60);
+  CHECK(sessionTimeoutSeconds(O{60000}, std::nullopt) == 60);
+  CHECK(sessionTimeoutSeconds(std::nullopt, L{90}) == 90);
+  CHECK(sessionTimeoutSeconds(O{120000}, L{90}) == 120);  // the new name wins
+  CHECK_THROWS_AS(sessionTimeoutSeconds(O{-1}, std::nullopt), SolariError);
+  CHECK_THROWS_AS(sessionTimeoutSeconds(std::nullopt, L{-5}), SolariError);
+  CHECK_THROWS_AS(sessionTimeoutSeconds(O{9000000000000LL}, std::nullopt), SolariError);
+}
+
+TEST_CASE("buildCreateBody sends the converted value under the wire name and the deprecated field still works") {
+  CreateSessionOptions o;
+  o.sessionTimeoutMs = 61001;
+  json body = buildCreateBody(o);
+  CHECK(body["timeoutSeconds"] == 62);
+  CHECK_FALSE(body.contains("sessionTimeoutMs"));
+
+  CreateSessionOptions legacy;
+  legacy.timeoutSeconds = 90;
+  CHECK(buildCreateBody(legacy)["timeoutSeconds"] == 90);
+  legacy.sessionTimeoutMs = 120000;  // both set: the new name wins
+  CHECK(buildCreateBody(legacy)["timeoutSeconds"] == 120);
+
+  CreateSessionOptions neg;
+  neg.sessionTimeoutMs = -1;
+  CHECK_THROWS_AS(buildCreateBody(neg), SolariError);
+}
