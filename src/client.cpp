@@ -66,7 +66,8 @@ nlohmann::json buildCreateBody(const CreateSessionOptions& opts) {
   if (opts.stealth) body["stealth"] = true;
   if (opts.captcha) body["captcha"] = true;
   if (opts.proxy) body["proxy"] = proxyToJson(*opts.proxy);
-  if (opts.timeoutSeconds) body["timeoutSeconds"] = *opts.timeoutSeconds;
+  const int secs = sessionTimeoutSeconds(opts.sessionTimeoutMs, opts.timeoutSeconds);
+  if (secs > 0) body["timeoutSeconds"] = secs;
   if (opts.keepAlive) body["keepAlive"] = true;
   if (opts.userMetadata) body["userMetadata"] = *opts.userMetadata;
   return body;
@@ -106,6 +107,20 @@ Session parseSessionResponse(const nlohmann::json& data) {
   auto um = data.find("userMetadata");
   if (um != data.end() && um->is_object()) s.userMetadata = *um;
   return s;
+}
+
+int sessionTimeoutSeconds(const std::optional<long long>& sessionTimeoutMs,
+                          const std::optional<int>& legacySeconds) {
+  if ((sessionTimeoutMs && *sessionTimeoutMs < 0) || (legacySeconds && *legacySeconds < 0)) {
+    throw SolariError("Solari: sessionTimeoutMs must not be negative");
+  }
+  if (sessionTimeoutMs && *sessionTimeoutMs > 0) {
+    const long long ms = *sessionTimeoutMs;
+    const long long secs = ms / 1000 + (ms % 1000 != 0 ? 1 : 0);
+    if (secs > 2147483647LL) throw SolariError("Solari: sessionTimeoutMs is too large");
+    return static_cast<int>(secs);
+  }
+  return legacySeconds && *legacySeconds > 0 ? *legacySeconds : 0;
 }
 
 namespace {

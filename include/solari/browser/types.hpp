@@ -89,11 +89,18 @@ struct CreateSessionOptions {
   bool captcha = false;
   /** Managed proxy egress. Requires `stealth`. */
   std::optional<ProxySpec> proxy;
-  /** End the session earlier than the plan maximum. Unset leaves the plan maximum;
-   *  the gateway refuses anything under 60. */
+  /** End the session earlier than the plan maximum, in milliseconds. Unset or 0
+   *  leaves the plan maximum. The gateway counts whole seconds, so the value is
+   *  rounded up (1001 ms is 2 s), and it refuses anything under 60 s. Negative
+   *  throws SolariError. */
+  std::optional<long long> sessionTimeoutMs;
+  /** The same limit in seconds.
+   *  @deprecated Use `sessionTimeoutMs`; it wins when both are set.
+   *  (Documented, not `[[deprecated]]`: GCC then warns in the implicit constructor of
+   *  every `CreateSessionOptions`, including for code that never touches this field.) */
   std::optional<int> timeoutSeconds;
   /** Hold the session after the client disconnects, until its deadline
-   *  (`timeoutSeconds`, else an hour, never past the plan maximum) or until it is
+   *  (`sessionTimeoutMs`, else an hour, never past the plan maximum) or until it is
    *  released, so a dropped client can reconnect. */
   bool keepAlive = false;
   /** Free-form JSON object stored with the session and returned by `get` and `list`. */
