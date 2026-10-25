@@ -1099,3 +1099,31 @@ TEST_CASE("buildCreateBody sends the converted value under the wire name and the
   neg.sessionTimeoutMs = -1;
   CHECK_THROWS_AS(buildCreateBody(neg), SolariError);
 }
+
+TEST_CASE("a body-less POST/PUT/PATCH sends Content-Length: 0 (the load balancer 411s an HTTP/1.1 request without it)") {
+  for (const char* method : {"POST", "PUT", "PATCH"}) {
+    MockServer server({{204, ""}});
+    HttpTransport t("slr_live_test", "http://127.0.0.1:" + std::to_string(server.port), 1, 5, 2000);
+    t.request(method, "/x");
+    const auto reqs = server.requests();
+    REQUIRE(reqs.size() == 1);
+    std::string head = reqs[0].substr(0, reqs[0].find("\r\n\r\n"));
+    for (auto& c : head) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    CHECK_MESSAGE(head.find("content-length: 0") != std::string::npos, method);
+  }
+  // A GET stays header-free of it, and a request that has a body keeps its real length.
+  MockServer getServer({{200, "{}"}});
+  HttpTransport g("slr_live_test", "http://127.0.0.1:" + std::to_string(getServer.port), 1, 5, 2000);
+  g.request("GET", "/x");
+  std::string ghead = getServer.requests()[0];
+  for (auto& c : ghead) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  CHECK(ghead.find("content-length") == std::string::npos);
+
+  MockServer bodyServer({{200, "{}"}});
+  HttpTransport b("slr_live_test", "http://127.0.0.1:" + std::to_string(bodyServer.port), 1, 5, 2000);
+  b.request("POST", "/x", nlohmann::json{{"a", 1}});
+  std::string bhead = bodyServer.requests()[0];
+  for (auto& c : bhead) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  CHECK(bhead.find("content-length: 7") != std::string::npos);
+  CHECK(bhead.find("content-length: 0") == std::string::npos);
+}
