@@ -16,6 +16,7 @@ include(FetchContent)
 FetchContent_Declare(
   nlohmann_json
   URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+  URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
@@ -38,7 +39,8 @@ if(SOLARI_WITH_WS)
   FetchContent_Declare(
     ixwebsocket
     GIT_REPOSITORY https://github.com/machinezone/IXWebSocket.git
-    GIT_TAG v11.4.5
+    # v11.4.5, pinned to the commit so a moved tag cannot change what an unattended build compiles
+    GIT_TAG c5a02f1066fb0fde48f80f51178429a27f689a39
   )
   FetchContent_MakeAvailable(ixwebsocket)
   list(APPEND SOLARI_BROWSER_SOURCES src/cdp.cpp src/launch.cpp)
@@ -61,6 +63,7 @@ if(SOLARI_BUILD_TESTS)
   FetchContent_Declare(
     doctest
     URL https://github.com/doctest/doctest/archive/refs/tags/v2.4.11.tar.gz
+    URL_HASH SHA256=632ed2c05a7f53fa961381497bf8069093f0d6628c5f26286161fbd32a560186
   )
   FetchContent_MakeAvailable(doctest)
 
