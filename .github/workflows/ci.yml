@@ -20,9 +20,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++ libcurl4-openssl-dev libssl-dev
       - name: Configure
-        # CMake 4 rejects doctest 2.4.11's cmake_minimum_required < 3.5.
-        run: cmake -S . -B build -DSOLARI_BUILD_TESTS=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build
       - name: Build
         run: cmake --build build -j"$(nproc)"
       - name: ctest
         run: ctest --test-dir build --output-on-failure
+      - name: FetchContent consumer (defaults)
+        run: |
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<EOF
+          cmake_minimum_required(VERSION 3.16)
+          project(consumer CXX)
+          include(FetchContent)
+          FetchContent_Declare(sb SOURCE_DIR "$GITHUB_WORKSPACE")
+          FetchContent_MakeAvailable(sb)
+          add_executable(c main.cpp)
+          target_link_libraries(c PRIVATE solari_browser)
+          EOF
+          printf '#include <solari/browser/client.hpp>\nint main(){return 0;}\n' > consumer/main.cpp
+          cmake -S consumer -B consumer/build && cmake --build consumer/build -j"$(nproc)"

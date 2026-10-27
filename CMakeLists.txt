@@ -8,7 +8,14 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(SOLARI_WITH_WS "Build the IXWebSocket raw-CDP escape hatch" ON)
-option(SOLARI_BUILD_TESTS "Build the offline test suite" ON)
+# Tests are on by default only when this is the top-level project, so a
+# FetchContent / add_subdirectory consumer never pulls in doctest.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(_solari_tests_default ON)
+else()
+  set(_solari_tests_default OFF)
+endif()
+option(SOLARI_BUILD_TESTS "Build the offline test suite" ${_solari_tests_default})
 
 include(FetchContent)
 
@@ -62,8 +69,8 @@ endif()
 if(SOLARI_BUILD_TESTS)
   FetchContent_Declare(
     doctest
-    URL https://github.com/doctest/doctest/archive/refs/tags/v2.4.11.tar.gz
-    URL_HASH SHA256=632ed2c05a7f53fa961381497bf8069093f0d6628c5f26286161fbd32a560186
+    URL https://github.com/doctest/doctest/archive/refs/tags/v2.4.12.tar.gz
+    URL_HASH SHA256=73381c7aa4dee704bd935609668cf41880ea7f19fa0504a200e13b74999c2d70
   )
   FetchContent_MakeAvailable(doctest)
 

@@ -126,7 +126,7 @@ Pulled automatically via CMake `FetchContent`:
 - [nlohmann/json](https://github.com/nlohmann/json) `v3.11.3` — JSON
 - [IXWebSocket](https://github.com/machinezone/IXWebSocket) `v11.4.5` — the
   optional raw-CDP transport, TLS via OpenSSL (`USE_TLS=ON`, `USE_OPEN_SSL=ON`)
-- [doctest](https://github.com/doctest/doctest) `v2.4.11` — tests
+- [doctest](https://github.com/doctest/doctest) `v2.4.12` — tests
 
 Required from the system:
 
@@ -148,7 +148,7 @@ Options:
 
 - `-DSOLARI_WITH_WS=OFF` — skip IXWebSocket. The whole control plane still builds
   and passes its tests; only `CdpConnection` is omitted.
-- `-DSOLARI_BUILD_TESTS=OFF` — skip the test target.
+- `-DSOLARI_BUILD_TESTS=OFF` — skip the test target. It defaults to ON only when this is the top-level project, so FetchContent consumers never fetch doctest.
 
 Link against the `solari_browser` target (or `libsolari_browser.a` + its headers).
 
