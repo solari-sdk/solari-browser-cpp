@@ -98,7 +98,9 @@ EditorState ProfileEditor::status() {
   if (!res.ok()) throwHttpError("Solari GET " + path, res.status, res.body);
   const auto j = parseBody(res.body, "editor status");
   EditorState st;
-  const std::string s = j.value("editorStatus", std::string("idle"));
+  // The gateway reports null before the editor page has been opened; that reads as idle.
+  auto sit = j.find("editorStatus");
+  const std::string s = sit != j.end() && sit->is_string() ? sit->get<std::string>() : std::string("idle");
   if (s == "launching") st.editorStatus = EditorStatus::Launching;
   else if (s == "editing") st.editorStatus = EditorStatus::Editing;
   else if (s == "saving") st.editorStatus = EditorStatus::Saving;

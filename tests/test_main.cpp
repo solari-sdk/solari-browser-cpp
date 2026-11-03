@@ -1204,6 +1204,18 @@ TEST_CASE("profiles.edit, status, saveAndClose and exit hit the editor routes wi
   CHECK_FALSE(hasHeader(reqs[0], "x-handoff-id: h_1"));
 }
 
+TEST_CASE("a null editorStatus reads as idle") {
+  MockServer server({
+      {200, kHandoff},
+      {200, R"({"id":"prof_1","editorStatus":null,"editorTaskArn":null,"version":3})"},
+  });
+  Client client = editorClient(server);
+  ProfileEditor ed = client.profiles.edit("prof_1");
+  const EditorState st = ed.status();
+  CHECK(st.editorStatus == EditorStatus::Idle);
+  CHECK(st.version == 3);
+}
+
 TEST_CASE("expired, not-running and failed-save editor calls surface their status") {
   for (int status : {404, 409, 502}) {
     MockServer server({
