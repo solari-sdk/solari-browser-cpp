@@ -1270,3 +1270,45 @@ TEST_CASE("waitForSave returns the new version, then times out with 408") {
     CHECK(e.status == 408);
   }
 }
+
+// ---------------------------------------------------------------------------
+// The CDP endpoint and signed URLs are credentials: errors must not print them
+// ---------------------------------------------------------------------------
+TEST_CASE("redactUrl keeps scheme, host and port only") {
+  CHECK(redactUrl("wss://api.getsolari.com/cdp/SECRETSESSION?token=abc") == "wss://api.getsolari.com/\xE2\x80\xA6");
+  CHECK(redactUrl("ws://127.0.0.1:9222/devtools/browser/SECRET") == "ws://127.0.0.1:9222/\xE2\x80\xA6");
+  CHECK(redactUrl("https://user:pw@bucket.s3.amazonaws.com/x?X-Amz-Signature=SECRET") == "https://bucket.s3.amazonaws.com/\xE2\x80\xA6");
+  CHECK(redactUrl("not a url SECRET") == "<url>");
+  CHECK(redactUrl("") == "<url>");
+  CHECK(redactUrl("://nohost") == "<url>");
+}
+
+TEST_CASE("scrubUrl removes the secret URL wherever the library printed it") {
+  const std::string url = "wss://api.getsolari.com/cdp/SECRETSESSION";
+  const auto out = scrubUrl("refused (" + url + ") while dialling " + url + ".", url);
+  CHECK(out.find("SECRETSESSION") == std::string::npos);
+  CHECK(out.find("api.getsolari.com") != std::string::npos);
+  CHECK(scrubUrl("nothing here", "").find("nothing") != std::string::npos);
+}
+
+TEST_CASE("a failed CDP connect does not print the endpoint") {
+  CdpConnection c("ws://127.0.0.1:1/cdp/CDPSECRET?token=TOKSECRET");
+  try {
+    c.connect();
+    FAIL("nothing listens on port 1");
+  } catch (const SolariError& e) {
+    const std::string msg = e.what();
+    CHECK(msg.find("CDPSECRET") == std::string::npos);
+    CHECK(msg.find("TOKSECRET") == std::string::npos);
+    CHECK(msg.find("127.0.0.1") != std::string::npos);
+  }
+}
+
+TEST_CASE("a failed signed-URL fetch does not print the signed URL") {
+  try {
+    fetchUrl("http://127.0.0.1:1/replay.json?X-Amz-Signature=SIGSECRET", 1000);
+    FAIL("nothing listens on port 1");
+  } catch (const SolariError& e) {
+    CHECK(std::string(e.what()).find("SIGSECRET") == std::string::npos);
+  }
+}

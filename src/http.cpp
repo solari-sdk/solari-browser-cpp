@@ -297,7 +297,7 @@ HttpResponse HttpTransport::request(const std::string& method,
 std::string fetchUrl(const std::string& url, long timeoutMs) {
   CurlResult c = doCurl("GET", url, {}, false, "", timeoutMs);
   if (c.networkError) {
-    throw SolariError("Solari: GET " + url + " failed: " + c.errMsg);
+    throw SolariError("Solari: GET " + redactUrl(url) + " failed: " + scrubUrl(c.errMsg, url));
   }
   if (c.status < 200 || c.status >= 300) {
     throw SolariError("Solari: GET returned " + std::to_string(c.status) + ": " +

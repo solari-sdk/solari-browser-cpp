@@ -1,6 +1,36 @@
 #include "solari/browser/errors.hpp"
 
+#include <cctype>
+#include <string>
+
 namespace solari::browser {
+
+std::string redactUrl(const std::string& url) {
+  const auto schemeEnd = url.find("://");
+  if (schemeEnd == std::string::npos || schemeEnd == 0) return "<url>";
+  for (std::size_t i = 0; i < schemeEnd; ++i) {
+    const char c = url[i];
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '+' || c == '-' || c == '.')) return "<url>";
+  }
+  const auto hostStart = schemeEnd + 3;
+  auto hostEnd = url.find_first_of("/?#", hostStart);
+  if (hostEnd == std::string::npos) hostEnd = url.size();
+  auto authority = url.substr(hostStart, hostEnd - hostStart);
+  const auto at = authority.rfind('@');  // user:password@host
+  if (at != std::string::npos) authority = authority.substr(at + 1);
+  if (authority.empty()) return "<url>";
+  return url.substr(0, schemeEnd + 3) + authority + "/\xE2\x80\xA6";
+}
+
+std::string scrubUrl(const std::string& text, const std::string& secretUrl) {
+  std::string out = text;
+  if (secretUrl.empty()) return out;
+  const std::string redacted = redactUrl(secretUrl);
+  for (std::size_t pos = out.find(secretUrl); pos != std::string::npos; pos = out.find(secretUrl, pos + redacted.size())) {
+    out.replace(pos, secretUrl.size(), redacted);
+  }
+  return out;
+}
 
 std::optional<std::string> parseErrorCode(const std::string& body) {
   if (body.empty()) return std::nullopt;

@@ -56,6 +56,16 @@ class SolariError : public std::runtime_error {
 };
 
 /**
+ * `scheme://host[:port]/…` of a URL, for error messages. A CDP endpoint, a signed replay URL and a
+ * preview URL carry their credential in the path or query, so those never go into an error. Text
+ * that is not a URL becomes `<url>`.
+ */
+std::string redactUrl(const std::string& url);
+
+/** `text` with every occurrence of `secretUrl` replaced by its redacted form. */
+std::string scrubUrl(const std::string& text, const std::string& secretUrl);
+
+/**
  * Lift `code` out of a JSON error body. Returns nullopt when the body isn't
  * JSON, isn't an object, or has no *string* `code` — mirroring the reference
  * SDK's `try { JSON.parse(text) } catch {}` + `typeof parsed.code === "string"`.
