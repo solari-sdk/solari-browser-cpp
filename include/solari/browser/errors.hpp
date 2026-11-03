@@ -62,8 +62,21 @@ class SolariError : public std::runtime_error {
  */
 std::string redactUrl(const std::string& url);
 
-/** `text` with every occurrence of `secretUrl` replaced by its redacted form. */
+/**
+ * `text` with every occurrence of `secretUrl` replaced by its redacted form, and then every other
+ * URL-looking token (`scheme://…`) redacted too: the transport libraries print the URL they were
+ * given, sometimes in a normalised spelling that no longer matches byte for byte.
+ */
 std::string scrubUrl(const std::string& text, const std::string& secretUrl);
+
+/**
+ * `text` with the session id in every `/sessions/<id>` cut to its first 8 characters. The session id
+ * is the credential inside the ws/cdp URLs, so it does not belong in error text or logs.
+ */
+std::string redactSessionPath(const std::string& text);
+
+/** The text of a failed CDP connect, with the endpoint and any URL in the library's message redacted. */
+std::string cdpConnectMessage(const std::string& endpoint, const std::string& libraryError);
 
 /**
  * Lift `code` out of a JSON error body. Returns nullopt when the body isn't

@@ -279,7 +279,7 @@ HttpResponse HttpTransport::request(const std::string& method,
       if (!retryThis || attempt == maxAttempts) {
         return HttpResponse{res.status, std::move(res.body)};
       }
-      lastErr = "Solari " + method + " " + path + ": " + std::to_string(res.status);
+      lastErr = "Solari " + method + " " + redactSessionPath(path) + ": " + std::to_string(res.status);
     } else {
       lastErr = res.errMsg;
     }
@@ -290,7 +290,7 @@ HttpResponse HttpTransport::request(const std::string& method,
     }
   }
 
-  throw SolariError("Solari " + method + " " + path + ": exhausted " +
+  throw SolariError("Solari " + method + " " + redactSessionPath(path) + ": exhausted " +
                     std::to_string(maxAttempts) + " attempts (" + lastErr + ")");
 }
 
