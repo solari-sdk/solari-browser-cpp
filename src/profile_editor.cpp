@@ -33,18 +33,18 @@ clock::time_point parseExpiresAt(const nlohmann::json& v) {
   if (!s.empty() && s.find_first_not_of("0123456789") == std::string::npos) {
     return clock::time_point(std::chrono::milliseconds(std::stoll(s)));
   }
-  std::tm tm{};
   int y, mo, d, h, mi, sec, n = 0;
   if (std::sscanf(s.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d%n", &y, &mo, &d, &h, &mi, &sec, &n) != 6) {
     throw SolariError("Solari: unparseable login-handoff expiresAt: " + s);
   }
-  tm.tm_year = y - 1900;
-  tm.tm_mon = mo - 1;
-  tm.tm_mday = d;
-  tm.tm_hour = h;
-  tm.tm_min = mi;
-  tm.tm_sec = sec;
-  auto tp = clock::from_time_t(timegm(&tm));
+  // Days since the epoch for a civil date (Howard Hinnant's algorithm): timegm is not on MSVC.
+  const long long y2 = mo <= 2 ? y - 1 : y;
+  const long long era = (y2 >= 0 ? y2 : y2 - 399) / 400;
+  const long long yoe = y2 - era * 400;
+  const long long doy = (153 * (mo > 2 ? mo - 3 : mo + 9) + 2) / 5 + d - 1;
+  const long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const long long days = era * 146097 + doe - 719468;
+  auto tp = clock::time_point(std::chrono::seconds(days * 86400 + h * 3600 + mi * 60 + sec));
   std::string rest = s.substr(static_cast<size_t>(n));
   if (!rest.empty() && rest[0] == '.') {
     size_t i = 1;
@@ -113,7 +113,7 @@ EditorState ProfileEditor::status() {
 long long ProfileEditor::saveAndClose() {
   const std::string path = editorPath(profileId, "/save");
   HttpResponse res =
-      client_->http().request("POST", path, std::nullopt, "", {"X-Handoff-Id: " + handoffId});
+      client_->http().request("POST", path, std::nullopt, "", {"X-Handoff-Id: " + handoffId}, true);
   if (!res.ok()) throwHttpError("Solari POST " + path, res.status, res.body);
   const auto j = parseBody(res.body, "editor save");
   auto vit = j.find("version");
@@ -123,7 +123,7 @@ long long ProfileEditor::saveAndClose() {
 void ProfileEditor::exit() {
   const std::string path = editorPath(profileId, "");
   HttpResponse res =
-      client_->http().request("DELETE", path, std::nullopt, "", {"X-Handoff-Id: " + handoffId});
+      client_->http().request("DELETE", path, std::nullopt, "", {"X-Handoff-Id: " + handoffId}, true);
   if (!res.ok()) throwHttpError("Solari DELETE " + path, res.status, res.body);
 }
 

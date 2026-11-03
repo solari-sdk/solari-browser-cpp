@@ -255,14 +255,16 @@ HttpResponse HttpTransport::request(const std::string& method,
                                     const std::string& path,
                                     const std::optional<nlohmann::json>& body,
                                     const std::string& idempotencyKey,
-                                    const std::vector<std::string>& extraHeaders) {
+                                    const std::vector<std::string>& extraHeaders,
+                                    bool noRetry) {
+  const int maxAttempts = noRetry ? 1 : maxAttempts_;
   const bool hasBody = body.has_value();
   // Prepared ONCE, outside the retry loop, so every attempt carries the same key.
   const PreparedRequest req = prepare(
       method, path, hasBody, hasBody ? body->dump() : std::string(), idempotencyKey, extraHeaders);
 
   std::string lastErr;
-  for (int attempt = 1; attempt <= maxAttempts_; attempt++) {
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
     RawResponse res = perform(req);
     if (!res.networkError) {
       // 2xx, or a status we don't retry: hand it back for the caller to map.
@@ -274,7 +276,7 @@ HttpResponse HttpTransport::request(const std::string& method,
           (isSafeToReplay(method, idempotencyKey) && saysRetryable(res.body));
       // Out of attempts: hand the last response back so the caller maps its status and
       // `code` like any other error, not a status-less "exhausted".
-      if (!retryThis || attempt == maxAttempts_) {
+      if (!retryThis || attempt == maxAttempts) {
         return HttpResponse{res.status, std::move(res.body)};
       }
       lastErr = "Solari " + method + " " + path + ": " + std::to_string(res.status);
@@ -282,14 +284,14 @@ HttpResponse HttpTransport::request(const std::string& method,
       lastErr = res.errMsg;
     }
 
-    if (attempt < maxAttempts_) {
+    if (attempt < maxAttempts) {
       // FIXED backoff — not exponential (mirrors the reference SDK).
       std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs_));
     }
   }
 
   throw SolariError("Solari " + method + " " + path + ": exhausted " +
-                    std::to_string(maxAttempts_) + " attempts (" + lastErr + ")");
+                    std::to_string(maxAttempts) + " attempts (" + lastErr + ")");
 }
 
 std::string fetchUrl(const std::string& url, long timeoutMs) {

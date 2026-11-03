@@ -1231,8 +1231,8 @@ TEST_CASE("expired, not-running and failed-save editor calls surface their statu
     } catch (const SolariError& e) {
       CHECK(e.status == status);
     }
-    // 404 and 409 are answers, not outages: no second attempt.
-    if (status != 502) CHECK(server.requests().size() == 2);
+    // A save is never replayed, even on a 502.
+    CHECK(server.requests().size() == 2);
   }
 }
 
