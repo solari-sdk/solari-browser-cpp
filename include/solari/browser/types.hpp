@@ -174,8 +174,8 @@ struct LaunchOptions {
   int retries = 0;
   /** Probe the connected browser before returning. Unset means on when `retries > 0`. */
   std::optional<bool> probe;
-  /** Hard bound on the probe, in ms. Default 2000. */
-  long probeTimeoutMs = 2000;
+  /** Hard bound on the probe, in ms. Default 15000. */
+  long probeTimeoutMs = 15000;
   /** Reply timeout for later CDP commands, in ms. Default 30000. */
   long callTimeoutMs = 30000;
   /** Fixed pause between attempts, in ms. Default 250. */

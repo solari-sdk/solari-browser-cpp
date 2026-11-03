@@ -76,7 +76,7 @@ launched->close();                    // closes the socket and releases the sess
 
 `launch()` creates the session, opens a `CdpConnection` to it, seeds the cookies of
 an attached profile (best effort), and, when `retries > 0` or `lo.probe = true`,
-sends `Browser.getVersion` within `probeTimeoutMs` (default 2000) to confirm the
+sends `Browser.getVersion` within `probeTimeoutMs` (default 15000) to confirm the
 browser answers. A session that fails after it was created is released before the
 next attempt or the final throw. Only transient failures are retried: no HTTP
 status, or a 5xx other than `PoolResponseUnparseable` (the pool may already have

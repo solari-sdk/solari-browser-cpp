@@ -943,6 +943,11 @@ TEST_CASE("sessions.list refuses an unexpressible filter without sending a reque
 }
 
 #ifdef SOLARI_WITH_WS
+TEST_CASE("the default probe timeout allows a cold pool slot") {
+  // 2 s failed healthy stealth launches on a cold pool slot; Go and Rust use the same 15 s bound.
+  CHECK(LaunchOptions().probeTimeoutMs == 15000);
+}
+
 #include <ixwebsocket/IXWebSocketServer.h>
 
 TEST_CASE("cookiesForCdp maps Playwright cookies and skips what CDP cannot take") {
