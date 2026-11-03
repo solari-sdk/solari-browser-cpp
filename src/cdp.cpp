@@ -98,8 +98,7 @@ void CdpConnection::connect() {
   const std::string err = signalled ? errMsg_ : "connect timed out";
   lk.unlock();
   ws->stop();
-  throw SolariError("Solari: CDP connect to " + endpoint_ + " failed: " +
-                    (err.empty() ? "connect failed" : err));
+  throw SolariError(cdpConnectMessage(endpoint_, err));
 }
 
 void CdpConnection::close() {

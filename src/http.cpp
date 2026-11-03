@@ -279,7 +279,7 @@ HttpResponse HttpTransport::request(const std::string& method,
       if (!retryThis || attempt == maxAttempts) {
         return HttpResponse{res.status, std::move(res.body)};
       }
-      lastErr = "Solari " + method + " " + path + ": " + std::to_string(res.status);
+      lastErr = "Solari " + method + " " + redactSessionPath(path) + ": " + std::to_string(res.status);
     } else {
       lastErr = res.errMsg;
     }
@@ -290,14 +290,14 @@ HttpResponse HttpTransport::request(const std::string& method,
     }
   }
 
-  throw SolariError("Solari " + method + " " + path + ": exhausted " +
+  throw SolariError("Solari " + method + " " + redactSessionPath(path) + ": exhausted " +
                     std::to_string(maxAttempts) + " attempts (" + lastErr + ")");
 }
 
 std::string fetchUrl(const std::string& url, long timeoutMs) {
   CurlResult c = doCurl("GET", url, {}, false, "", timeoutMs);
   if (c.networkError) {
-    throw SolariError("Solari: GET " + url + " failed: " + c.errMsg);
+    throw SolariError("Solari: GET " + redactUrl(url) + " failed: " + scrubUrl(c.errMsg, url));
   }
   if (c.status < 200 || c.status >= 300) {
     throw SolariError("Solari: GET returned " + std::to_string(c.status) + ": " +

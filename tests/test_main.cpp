@@ -1270,3 +1270,76 @@ TEST_CASE("waitForSave returns the new version, then times out with 408") {
     CHECK(e.status == 408);
   }
 }
+
+// ---------------------------------------------------------------------------
+// The CDP endpoint and signed URLs are credentials: errors must not print them
+// ---------------------------------------------------------------------------
+TEST_CASE("redactUrl keeps scheme, host and port only") {
+  CHECK(redactUrl("wss://api.getsolari.com/cdp/SECRETSESSION?token=abc") == "wss://api.getsolari.com/\xE2\x80\xA6");
+  CHECK(redactUrl("ws://127.0.0.1:9222/devtools/browser/SECRET") == "ws://127.0.0.1:9222/\xE2\x80\xA6");
+  CHECK(redactUrl("https://user:pw@bucket.s3.amazonaws.com/x?X-Amz-Signature=SECRET") == "https://bucket.s3.amazonaws.com/\xE2\x80\xA6");
+  CHECK(redactUrl("not a url SECRET") == "<url>");
+  CHECK(redactUrl("") == "<url>");
+  CHECK(redactUrl("://nohost") == "<url>");
+}
+
+TEST_CASE("scrubUrl removes the secret URL wherever the library printed it") {
+  const std::string url = "wss://api.getsolari.com/cdp/SECRETSESSION";
+  const auto out = scrubUrl("refused (" + url + ") while dialling " + url + ".", url);
+  CHECK(out.find("SECRETSESSION") == std::string::npos);
+  CHECK(out.find("api.getsolari.com") != std::string::npos);
+  CHECK(scrubUrl("nothing here", "").find("nothing") != std::string::npos);
+}
+
+TEST_CASE("a failed CDP connect does not print the endpoint") {
+  CdpConnection c("ws://127.0.0.1:1/cdp/CDPSECRET?token=TOKSECRET");
+  try {
+    c.connect();
+    FAIL("nothing listens on port 1");
+  } catch (const SolariError& e) {
+    const std::string msg = e.what();
+    CHECK(msg.find("CDPSECRET") == std::string::npos);
+    CHECK(msg.find("TOKSECRET") == std::string::npos);
+    CHECK(msg.find("127.0.0.1") != std::string::npos);
+  }
+}
+
+TEST_CASE("a failed signed-URL fetch does not print the signed URL") {
+  try {
+    fetchUrl("http://127.0.0.1:1/replay.json?X-Amz-Signature=SIGSECRET", 1000);
+    FAIL("nothing listens on port 1");
+  } catch (const SolariError& e) {
+    CHECK(std::string(e.what()).find("SIGSECRET") == std::string::npos);
+  }
+}
+
+TEST_CASE("redactSessionPath cuts the session id to 8 characters") {
+  CHECK(redactSessionPath("Solari GET /sessions/pool:abc:org:123.SECRETSIG") == "Solari GET /sessions/pool:abc\xE2\x80\xA6");
+  CHECK(redactSessionPath("/sessions/pool:abc:org:123.SECRET/replay-url") == "/sessions/pool:abc\xE2\x80\xA6/replay-url");
+  CHECK(redactSessionPath("/sessions/short") == "/sessions/short");
+  CHECK(redactSessionPath("/profiles/prof_123456789") == "/profiles/prof_123456789");
+  CHECK(redactSessionPath("") == "");
+}
+
+TEST_CASE("a REST error does not print the session id") {
+  try {
+    throwHttpError("Solari GET /sessions/pool:abc:org:123.IDSECRET", 404, "{}");
+    FAIL("throwHttpError must throw");
+  } catch (const SolariError& e) {
+    const std::string msg = e.what();
+    CHECK(msg.find("IDSECRET") == std::string::npos);
+    CHECK(msg.find("/sessions/pool:abc") != std::string::npos);
+  }
+}
+
+TEST_CASE("cdpConnectMessage redacts the endpoint and any URL the library printed, in any spelling") {
+  const std::string endpoint = "wss://api.getsolari.com/cdp/CDPSECRET?token=TOK";
+  // The library echoes the URL exactly, normalised (upper-case host, explicit port), and another URL.
+  const auto msg = cdpConnectMessage(
+      endpoint, "failed " + endpoint + " then WSS://API.GETSOLARI.COM:443/cdp/CDPSECRET and (https://other.example/p/SECRET2)");
+  CHECK(msg.find("CDPSECRET") == std::string::npos);
+  CHECK(msg.find("TOK") == std::string::npos);
+  CHECK(msg.find("SECRET2") == std::string::npos);
+  CHECK(msg.find("api.getsolari.com") != std::string::npos);
+  CHECK(cdpConnectMessage(endpoint, "") == "Solari: CDP connect to wss://api.getsolari.com/\xE2\x80\xA6 failed: connect failed");
+}
