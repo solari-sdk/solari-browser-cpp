@@ -4,7 +4,7 @@
 // and ends the editor, `exit()` ends it without saving.
 //
 // An expired or used link fails every call with a SolariError of status 404; an editor that is
-// not running with 409; a failed save with 502 (the editor stays open, so retry).
+// not running with 409; a failed save with 502 (the editor goes to error: `exit()` and start a new `edit`; a second save gets 409). Save and exit are never retried automatically.
 #pragma once
 #include <chrono>
 #include <string>

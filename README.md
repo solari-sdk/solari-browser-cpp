@@ -238,7 +238,7 @@ v = ed.waitForSave(std::chrono::minutes(10));   // poll until someone saves from
 ```
 
 Errors are `SolariError`s: an expired or used link has `status == 404`, an editor
-that is not running 409, a failed save 502 (the editor stays open; save and exit are never retried automatically, so call again).
+that is not running 409, a failed save 502 (the editor goes to error: `exit()` and start a new `edit`; a second save gets 409). Save and exit are never retried automatically.
 `waitForSave` throws with status 408 on timeout or link expiry.
 
 ### Proxy countries
