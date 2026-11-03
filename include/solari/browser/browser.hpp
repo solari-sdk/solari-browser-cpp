@@ -3,6 +3,7 @@
 #include "solari/browser/client.hpp"
 #include "solari/browser/errors.hpp"
 #include "solari/browser/http.hpp"
+#include "solari/browser/profile_editor.hpp"
 #include "solari/browser/types.hpp"
 
 #ifdef SOLARI_WITH_WS

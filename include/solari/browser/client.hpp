@@ -15,6 +15,7 @@
 
 #include "solari/browser/errors.hpp"
 #include "solari/browser/http.hpp"
+#include "solari/browser/profile_editor.hpp"
 #include "solari/browser/types.hpp"
 
 namespace solari::browser {
@@ -139,6 +140,13 @@ class ProfilesResource {
   void remove(const std::string& id);
   /** `POST /profiles/:id/save` `{storageState}` — persist cookies/localStorage. */
   SaveProfileResult save(const std::string& id, const StorageState& storageState);
+  /**
+   * `POST /profiles/:id/login-handoff` — open the profile editor on an existing profile. Send
+   * the person to `ProfileEditor::url`; it is valid for about 30 minutes. `reason` is optional
+   * free text. There is no auto-save and no save without closing. The `Client` must outlive
+   * the returned editor.
+   */
+  ProfileEditor edit(const std::string& id, const std::string& reason = "");
 
  private:
   Client* client_;

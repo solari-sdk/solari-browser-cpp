@@ -118,16 +118,20 @@ class HttpTransport {
    */
   PreparedRequest prepare(const std::string& method, const std::string& path,
                           bool hasBody, const std::string& body,
-                          const std::string& idempotencyKey = "") const;
+                          const std::string& idempotencyKey = "",
+                          const std::vector<std::string>& extraHeaders = {}) const;
 
   /**
    * Perform a request under the retry policy. A non-retryable non-2xx response
    * is RETURNED (callers map status -> SolariError themselves, and DELETE
    * tolerates 404). Throws SolariError only when every attempt failed.
+   * `noRetry` makes the call single-shot (editor save and exit must not be replayed).
    */
   HttpResponse request(const std::string& method, const std::string& path,
                        const std::optional<nlohmann::json>& body = std::nullopt,
-                       const std::string& idempotencyKey = "");
+                       const std::string& idempotencyKey = "",
+                       const std::vector<std::string>& extraHeaders = {},
+                       bool noRetry = false);
 
  private:
   struct RawResponse {

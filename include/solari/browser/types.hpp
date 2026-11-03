@@ -186,6 +186,8 @@ struct LaunchOptions {
 struct Profile {
   std::string id;
   std::string name;
+  /** Increases on every save. 0 when the gateway omits it. */
+  long long version = 0;
   Json raw;
 };
 
