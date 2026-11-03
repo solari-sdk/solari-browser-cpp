@@ -36,6 +36,7 @@ set(SOLARI_BROWSER_SOURCES
   src/http.cpp
   src/types.cpp
   src/client.cpp
+  src/profile_editor.cpp
 )
 
 # --- IXWebSocket (optional; TLS via OpenSSL) --------------------------------

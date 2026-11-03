@@ -223,7 +223,8 @@ HttpTransport::HttpTransport(std::string apiKey, std::string baseUrl,
 PreparedRequest HttpTransport::prepare(const std::string& method,
                                        const std::string& path, bool hasBody,
                                        const std::string& body,
-                                       const std::string& idempotencyKey) const {
+                                       const std::string& idempotencyKey,
+                                       const std::vector<std::string>& extraHeaders) const {
   PreparedRequest r;
   r.method = method;
   r.url = baseUrl_ + path;
@@ -235,6 +236,7 @@ PreparedRequest HttpTransport::prepare(const std::string& method,
   if (!idempotencyKey.empty()) {
     r.headers.push_back("Idempotency-Key: " + idempotencyKey);
   }
+  for (const auto& h : extraHeaders) r.headers.push_back(h);
   return r;
 }
 
@@ -252,11 +254,12 @@ HttpTransport::RawResponse HttpTransport::perform(const PreparedRequest& req) co
 HttpResponse HttpTransport::request(const std::string& method,
                                     const std::string& path,
                                     const std::optional<nlohmann::json>& body,
-                                    const std::string& idempotencyKey) {
+                                    const std::string& idempotencyKey,
+                                    const std::vector<std::string>& extraHeaders) {
   const bool hasBody = body.has_value();
   // Prepared ONCE, outside the retry loop, so every attempt carries the same key.
   const PreparedRequest req = prepare(
-      method, path, hasBody, hasBody ? body->dump() : std::string(), idempotencyKey);
+      method, path, hasBody, hasBody ? body->dump() : std::string(), idempotencyKey, extraHeaders);
 
   std::string lastErr;
   for (int attempt = 1; attempt <= maxAttempts_; attempt++) {

@@ -118,7 +118,8 @@ class HttpTransport {
    */
   PreparedRequest prepare(const std::string& method, const std::string& path,
                           bool hasBody, const std::string& body,
-                          const std::string& idempotencyKey = "") const;
+                          const std::string& idempotencyKey = "",
+                          const std::vector<std::string>& extraHeaders = {}) const;
 
   /**
    * Perform a request under the retry policy. A non-retryable non-2xx response
@@ -127,7 +128,8 @@ class HttpTransport {
    */
   HttpResponse request(const std::string& method, const std::string& path,
                        const std::optional<nlohmann::json>& body = std::nullopt,
-                       const std::string& idempotencyKey = "");
+                       const std::string& idempotencyKey = "",
+                       const std::vector<std::string>& extraHeaders = {});
 
  private:
   struct RawResponse {

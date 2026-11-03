@@ -185,6 +185,7 @@ Profile parseProfile(const nlohmann::json& row) {
   Profile p;
   if (auto id = jsonStr(row, "id")) p.id = *id;
   if (auto name = jsonStr(row, "name")) p.name = *name;
+  p.version = jsonNum(row, "version", 0);
   p.raw = row;
   return p;
 }
@@ -333,6 +334,15 @@ SaveProfileResult ProfilesResource::save(const std::string& id,
   HttpResponse res = client_->http().request("POST", path, body);
   if (!res.ok()) throwHttpError("Solari POST " + path, res.status, res.body);
   return parseSaveResult(parseJsonBody(res.body, "profile save"));
+}
+
+ProfileEditor ProfilesResource::edit(const std::string& id, const std::string& reason) {
+  const std::string path = "/profiles/" + encodeURIComponent(id) + "/login-handoff";
+  nlohmann::json body = nlohmann::json::object();
+  if (!reason.empty()) body["reason"] = reason;
+  HttpResponse res = client_->http().request("POST", path, body);
+  if (!res.ok()) throwHttpError("Solari POST " + path, res.status, res.body);
+  return parseProfileEditor(client_, id, parseJsonBody(res.body, "login-handoff"));
 }
 
 // --- client -----------------------------------------------------------------

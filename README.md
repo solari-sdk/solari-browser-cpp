@@ -4,7 +4,7 @@ A C++17 binding for the Solari **browser** gateway. It mirrors the control-plane
 half of `@solarisdk/browser`: a `solari::browser::Client` with
 
 - `.sessions` — `create` / `get` / `list` / `release` / `getReplayUrl` / `downloadReplay`
-- `.profiles` — `list` / `create` / `remove` / `save`
+- `.profiles` — `list` / `create` / `remove` / `save` / `edit`
 - `.proxyCountries()` — supported egress countries + whether proxying is configured
 - `.launch()` — create + raw-CDP connect + health probe + release on close (needs
   `SOLARI_WITH_WS`, see below)
@@ -219,6 +219,27 @@ for (const auto& row : client.profiles.list())
 
 client.profiles.remove(p.id);        // `remove`, since `delete` is a keyword
 ```
+
+### Editing a profile
+
+`client.profiles.edit(id, reason)` opens the profile editor on an existing
+profile and returns a `ProfileEditor`. Send the person to `editor.url`; it is
+valid for about 30 minutes (`editor.expiresAt`). There is no auto-save and no
+save without closing. The `Client` must outlive the editor.
+
+```cpp
+sb::ProfileEditor ed = client.profiles.edit(p.id, "refresh login");   // reason is optional
+std::cout << ed.url << " (start version " << ed.startVersion << ")\n";
+
+sb::EditorState st = ed.status();        // st.editorStatus: Idle | Launching | Editing | Saving | Error
+long long v = ed.saveAndClose();         // store the state and close the editor
+ed.exit();                               // close without saving
+v = ed.waitForSave(std::chrono::minutes(10));   // poll until someone saves from the page
+```
+
+Errors are `SolariError`s: an expired or used link has `status == 404`, an editor
+that is not running 409, a failed save 502 (the editor stays open, so retry).
+`waitForSave` throws with status 408 on timeout or link expiry.
 
 ### Proxy countries
 

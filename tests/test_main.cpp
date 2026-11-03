@@ -1127,3 +1127,129 @@ TEST_CASE("a body-less POST/PUT/PATCH sends Content-Length: 0 (the load balancer
   CHECK(bhead.find("content-length: 7") != std::string::npos);
   CHECK(bhead.find("content-length: 0") == std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// Profile editor
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char* kHandoff =
+    R"({"handoffId":"h_1","url":"https://edit.example/h_1","expiresAt":"2030-01-01T00:30:00.000Z","version":3,"profileId":"prof_1","mode":"cold"})";
+
+std::string requestLine(const std::string& raw) { return raw.substr(0, raw.find("\r\n")); }
+
+bool hasHeader(const std::string& raw, const std::string& lowerLine) {
+  auto pos = raw.find("\r\n\r\n");
+  std::istringstream hs(pos == std::string::npos ? raw : raw.substr(0, pos));
+  std::string line;
+  while (std::getline(hs, line)) {
+    for (auto& c : line) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    while (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line == lowerLine) return true;
+  }
+  return false;
+}
+
+Client editorClient(const MockServer& server) {
+  ClientOptions o;
+  o.apiKey = "slr_live_test";
+  o.baseUrl = "http://127.0.0.1:" + std::to_string(server.port);
+  o.backoffMs = 1;
+  o.timeoutMs = 2000;
+  return Client(o);
+}
+
+}  // namespace
+
+TEST_CASE("parseExpiresAt reads ISO-8601 and epoch milliseconds") {
+  using namespace std::chrono;
+  auto secs = [](system_clock::time_point t) {
+    return duration_cast<seconds>(t.time_since_epoch()).count();
+  };
+  CHECK(secs(parseExpiresAt(json("2030-01-01T00:30:00.000Z"))) == 1893457800);
+  CHECK(secs(parseExpiresAt(json("2030-01-01T01:30:00+01:00"))) == 1893457800);
+  CHECK(secs(parseExpiresAt(json(4102444800000LL))) == 4102444800LL);
+  CHECK_THROWS_AS(parseExpiresAt(json("soon")), SolariError);
+}
+
+TEST_CASE("profiles.edit, status, saveAndClose and exit hit the editor routes with X-Handoff-Id") {
+  MockServer server({
+      {200, kHandoff},
+      {200, R"({"editorStatus":"editing","version":3})"},
+      {200, R"({"ok":true,"version":4})"},
+      {200, R"({"ok":true})"},
+  });
+  Client client = editorClient(server);
+  ProfileEditor ed = client.profiles.edit("prof_1", "refresh login");
+  CHECK(ed.url == "https://edit.example/h_1");
+  CHECK(ed.handoffId == "h_1");
+  CHECK(ed.startVersion == 3);
+  CHECK(std::chrono::duration_cast<std::chrono::seconds>(ed.expiresAt.time_since_epoch()).count() == 1893457800);
+
+  const EditorState st = ed.status();
+  CHECK(st.editorStatus == EditorStatus::Editing);
+  CHECK(st.version == 3);
+  CHECK(ed.saveAndClose() == 4);
+  ed.exit();
+
+  const auto reqs = server.requests();
+  REQUIRE(reqs.size() == 4);
+  CHECK(requestLine(reqs[0]) == "POST /profiles/prof_1/login-handoff HTTP/1.1");
+  CHECK(reqs[0].find("refresh login") != std::string::npos);
+  CHECK(requestLine(reqs[1]) == "GET /profiles/prof_1/editor HTTP/1.1");
+  CHECK(requestLine(reqs[2]) == "POST /profiles/prof_1/editor/save HTTP/1.1");
+  CHECK(requestLine(reqs[3]) == "DELETE /profiles/prof_1/editor HTTP/1.1");
+  for (size_t i = 1; i < 4; i++) CHECK(hasHeader(reqs[i], "x-handoff-id: h_1"));
+  CHECK_FALSE(hasHeader(reqs[0], "x-handoff-id: h_1"));
+}
+
+TEST_CASE("expired, not-running and failed-save editor calls surface their status") {
+  for (int status : {404, 409, 502}) {
+    MockServer server({
+        {200, kHandoff},
+        {status, R"({"error":"nope"})"},
+        {status, R"({"error":"nope"})"},
+    });
+    Client client = editorClient(server);
+    ProfileEditor ed = client.profiles.edit("prof_1");
+    try {
+      ed.saveAndClose();
+      FAIL("expected SolariError");
+    } catch (const SolariError& e) {
+      CHECK(e.status == status);
+    }
+    // 404 and 409 are answers, not outages: no second attempt.
+    if (status != 502) CHECK(server.requests().size() == 2);
+  }
+}
+
+TEST_CASE("waitForSave returns the new version, then times out with 408") {
+  MockServer server({
+      {200, kHandoff},
+      {200, R"([{"id":"prof_1","name":"a","version":3}])"},
+      {200, R"([{"id":"prof_2","name":"b","version":9},{"id":"prof_1","name":"a","version":4}])"},
+  });
+  Client client = editorClient(server);
+  ProfileEditor ed = client.profiles.edit("prof_1");
+  CHECK(ed.waitForSave(std::chrono::seconds(5), std::chrono::milliseconds(1)) == 4);
+
+  std::vector<std::pair<int, std::string>> unchanged{{200, kHandoff}};
+  for (int i = 0; i < 200; i++) unchanged.push_back({200, R"([{"id":"prof_1","name":"a","version":3}])"});
+  MockServer server2(unchanged);
+  Client client2 = editorClient(server2);
+  ProfileEditor ed2 = client2.profiles.edit("prof_1");
+  try {
+    ed2.waitForSave(std::chrono::milliseconds(30), std::chrono::milliseconds(1));
+    FAIL("expected a timeout");
+  } catch (const SolariError& e) {
+    CHECK(e.status == 408);
+  }
+  ed2.expiresAt = std::chrono::system_clock::now() - std::chrono::minutes(1);
+  try {
+    ed2.waitForSave();
+    FAIL("expected expiry");
+  } catch (const SolariError& e) {
+    CHECK(e.status == 408);
+  }
+}
