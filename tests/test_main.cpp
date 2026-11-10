@@ -1353,6 +1353,26 @@ TEST_CASE("the error code is still parsed from the raw body after redaction") {
   }
 }
 
+TEST_CASE("a sessionId field in the body is cut even when the request path carries no id") {
+  const std::string id = "pool-abc:org-123.IDSECRETSIGNATURE";
+  try {
+    throwHttpError("Solari GET /profiles", 409, R"({"error":"busy","code":"Conflict","sessionId":")" + id + R"("})");
+    FAIL("throwHttpError must throw");
+  } catch (const SolariError& e) {
+    const std::string msg = e.what();
+    CHECK(msg.find("IDSECRET") == std::string::npos);
+    CHECK(msg.find(R"("sessionId":"pool-abc)") != std::string::npos);
+    REQUIRE(e.code.has_value());
+    CHECK(*e.code == "Conflict");
+  }
+}
+
+TEST_CASE("an id percent-encoded with lowercase hex in the body is cut too") {
+  const std::string what = "Solari GET /sessions/pool-abc%3aorg-123.IDSECRETSIGNATURE/replay-url";
+  CHECK(redactBody(what, R"({"error":"no session pool-abc%3aorg-123.IDSECRETSIGNATURE"})").find("IDSECRET") == std::string::npos);
+  CHECK(redactBody(what, R"({"error":"no session pool-abc%3Aorg-123.IDSECRETSIGNATURE"})").find("IDSECRET") == std::string::npos);
+}
+
 TEST_CASE("redactBody leaves short ids and unrelated text alone") {
   CHECK(redactBody("/sessions/short", R"({"x":"short"})") == R"({"x":"short"})");
   CHECK(redactBody("/profiles/abcdefghijkl", "abcdefghijkl") == "abcdefghijkl");
