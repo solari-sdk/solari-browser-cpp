@@ -1321,6 +1321,43 @@ TEST_CASE("redactSessionPath cuts the session id to 8 characters") {
   CHECK(redactSessionPath("") == "");
 }
 
+TEST_CASE("an error body that echoes the session id is cut (replay-url 404)") {
+  const std::string id = "pool-abc:org-123.IDSECRETSIGNATURE";
+  const std::string what = "Solari GET /sessions/" + id + "/replay-url";
+  const std::vector<std::string> bodies = {
+      R"({"error":"Replay not ready yet","code":"ReplayPending","retryable":true,"sessionId":")" + id + R"("})",
+      R"({"error":"no session )" + id + R"( here"})",
+      R"({"error":"no session pool-abc%3Aorg-123.IDSECRETSIGNATURE here"})",
+      R"({ "sessionId" : ")" + id + R"(" })",
+  };
+  for (const auto& body : bodies) {
+    try {
+      throwHttpError(what, 404, body);
+      FAIL("throwHttpError must throw");
+    } catch (const SolariError& e) {
+      CHECK(std::string(e.what()).find("IDSECRET") == std::string::npos);
+      CHECK(e.status == 404);
+    }
+  }
+}
+
+TEST_CASE("the error code is still parsed from the raw body after redaction") {
+  const std::string id = "pool-abc:org-123.IDSECRETSIGNATURE";
+  try {
+    throwHttpError("Solari GET /sessions/" + id + "/replay-url", 404,
+                   R"({"code":"ReplayPending","sessionId":")" + id + R"("})");
+    FAIL("throwHttpError must throw");
+  } catch (const SolariError& e) {
+    REQUIRE(e.code.has_value());
+    CHECK(*e.code == "ReplayPending");
+  }
+}
+
+TEST_CASE("redactBody leaves short ids and unrelated text alone") {
+  CHECK(redactBody("/sessions/short", R"({"x":"short"})") == R"({"x":"short"})");
+  CHECK(redactBody("/profiles/abcdefghijkl", "abcdefghijkl") == "abcdefghijkl");
+}
+
 TEST_CASE("a REST error does not print the session id") {
   try {
     throwHttpError("Solari GET /sessions/pool:abc:org:123.IDSECRET", 404, "{}");

@@ -75,6 +75,13 @@ std::string scrubUrl(const std::string& text, const std::string& secretUrl);
  */
 std::string redactSessionPath(const std::string& text);
 
+/**
+ * `body` with the session id of `what` (`... /sessions/<id>/...`), in any spelling, and every `"sessionId":"..."` field cut to
+ * their first 8 characters. The id is the credential inside the ws/cdp URLs and the gateway's error bodies used to echo it
+ * (the replay-url 404), so it must not reach an error message through the body either.
+ */
+std::string redactBody(const std::string& what, const std::string& body);
+
 /** The text of a failed CDP connect, with the endpoint and any URL in the library's message redacted. */
 std::string cdpConnectMessage(const std::string& endpoint, const std::string& libraryError);
 
