@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.3
+
+- **The gateway's error body no longer carries the session id into error messages.** `GET /sessions/<id>/replay-url` answered `404 ReplayPending` with the full `sessionId` in its body and `throwHttpError` appended that body. The id is the credential inside the ws/cdp URLs. The body is now redacted (`redactBody()`: the request path's id, in any spelling, and every `"sessionId"` field cut to 8 characters); `code` is still parsed from the raw body.
+
 ## v0.5.2
 
 - **Errors no longer print the session's credential URLs.** A failed `CdpConnection::connect()` used to put the full CDP endpoint (which carries the session's credential in its path) in the exception text, and a failed signed-URL fetch printed the signed URL. They now show `scheme://host/…` only, via the new `redactUrl()` / `scrubUrl()` helpers. The session id in `/sessions/<id>` (the credential inside those URLs) is cut to its first 8 characters in REST error messages too (`redactSessionPath()`).

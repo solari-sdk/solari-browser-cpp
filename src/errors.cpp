@@ -1,6 +1,7 @@
 #include "solari/browser/errors.hpp"
 
 #include <cctype>
+#include <regex>
 #include <string>
 
 namespace solari::browser {
@@ -66,6 +67,73 @@ std::string redactSessionPath(const std::string& text) {
   return out;
 }
 
+namespace {
+std::string shortId(const std::string& id) { return id.size() > 8 ? id.substr(0, 8) + "\xE2\x80\xA6" : id; }
+
+std::string percentDecode(const std::string& s) {
+  std::string out;
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '%' && i + 2 < s.size() && std::isxdigit(static_cast<unsigned char>(s[i + 1])) &&
+        std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
+      out += static_cast<char>(std::stoi(s.substr(i + 1, 2), nullptr, 16));
+      i += 2;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
+std::string percentEncode(const std::string& s) {
+  static const char* hex = "0123456789ABCDEF";
+  std::string out;
+  for (unsigned char c : s) {
+    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += static_cast<char>(c);
+    } else {
+      out += '%';
+      out += hex[c >> 4];
+      out += hex[c & 15];
+    }
+  }
+  return out;
+}
+
+void replaceAll(std::string& text, const std::string& from, const std::string& to) {
+  if (from.empty()) return;
+  for (std::size_t pos = text.find(from); pos != std::string::npos; pos = text.find(from, pos + to.size())) {
+    text.replace(pos, from.size(), to);
+  }
+}
+}  // namespace
+
+std::string redactBody(const std::string& what, const std::string& body) {
+  std::string out = body;
+  static const std::string key = "/sessions/";
+  for (std::size_t at = what.find(key); at != std::string::npos; at = what.find(key, at + key.size())) {
+    const auto idStart = at + key.size();
+    auto idEnd = idStart;
+    while (idEnd < what.size() && what[idEnd] != '/' && what[idEnd] != '?' && what[idEnd] != '#' &&
+           !std::isspace(static_cast<unsigned char>(what[idEnd]))) ++idEnd;
+    const auto raw = what.substr(idStart, idEnd - idStart);
+    if (raw.size() <= 8) continue;
+    const auto plain = percentDecode(raw);
+    replaceAll(out, raw, shortId(plain));
+    replaceAll(out, percentEncode(plain), shortId(plain));
+    replaceAll(out, plain, shortId(plain));
+  }
+  static const std::regex field(R"re(("sessionId"\s*:\s*")([^"]+)(["]))re");
+  std::string result;
+  auto last = out.cbegin();
+  for (std::sregex_iterator it(out.cbegin(), out.cend(), field), end; it != end; ++it) {
+    result.append(last, (*it)[0].first);
+    result += (*it)[1].str() + shortId((*it)[2].str()) + (*it)[3].str();
+    last = (*it)[0].second;
+  }
+  result.append(last, out.cend());
+  return result;
+}
+
 std::string cdpConnectMessage(const std::string& endpoint, const std::string& libraryError) {
   return "Solari: CDP connect to " + redactUrl(endpoint) + " failed: " +
          (libraryError.empty() ? "connect failed" : scrubUrl(libraryError, endpoint));
@@ -86,7 +154,7 @@ std::optional<std::string> parseErrorCode(const std::string& body) {
 }
 
 void throwHttpError(const std::string& what, int status, const std::string& body) {
-  throw SolariError(redactSessionPath(what) + " failed: " + std::to_string(status) + " " + body,
+  throw SolariError(redactSessionPath(what) + " failed: " + std::to_string(status) + " " + redactBody(what, body),
                     status, parseErrorCode(body));
 }
 
