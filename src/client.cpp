@@ -186,6 +186,7 @@ Profile parseProfile(const nlohmann::json& row) {
   if (auto id = jsonStr(row, "id")) p.id = *id;
   if (auto name = jsonStr(row, "name")) p.name = *name;
   p.version = jsonNum(row, "version", 0);
+  if (row.contains("sizeBytes") && row["sizeBytes"].is_number()) p.sizeBytes = row["sizeBytes"].get<long long>();
   p.raw = row;
   return p;
 }
