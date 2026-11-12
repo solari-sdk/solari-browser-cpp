@@ -319,6 +319,10 @@ TEST_CASE("parseProfiles pulls {id,name} and keeps the full row in raw") {
   // Extra platform columns survive on `raw` without an SDK bump.
   CHECK(profiles[0].raw["sizeBytes"] == 4096);
   CHECK(profiles[0].raw["version"] == 3);
+  // sizeBytes is a typed field (retest D-25); empty for a profile that has not been saved.
+  REQUIRE(profiles[0].sizeBytes.has_value());
+  CHECK(*profiles[0].sizeBytes == 4096);
+  CHECK_FALSE(profiles[1].sizeBytes.has_value());
   CHECK(profiles[1].id == "prof_2");
   CHECK(profiles[1].name == "fresh");
 }

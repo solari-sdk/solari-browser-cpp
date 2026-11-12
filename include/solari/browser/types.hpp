@@ -45,7 +45,8 @@ struct ProxyRequest {
   std::optional<std::string> tier;
   /** Pin egress to a specific ASN (e.g. "20057" for AT&T Mobility). */
   std::optional<std::string> asn;
-  /** Sticky-session id (alnum + dash, <=32 chars). Pins the egress IP. */
+  /** Sticky-session label: any 1-128 characters (the gateway turns it into a stable id for the proxy vendor). The same label
+   *  gets the same egress IP. */
   std::optional<std::string> session;
   /** Sticky lifetime in minutes (1-30, default 10). Only with `session`. */
   std::optional<int> sessionDuration;
@@ -188,6 +189,9 @@ struct Profile {
   std::string name;
   /** Increases on every save. 0 when the gateway omits it. */
   long long version = 0;
+  /** Size of the saved storage state in bytes (a JSON number on the wire). Empty for a profile that has not been saved yet. The
+   *  TypeScript `Profile.sizeBytes`; it used to be reachable only through `raw`. */
+  std::optional<long long> sizeBytes;
   Json raw;
 };
 

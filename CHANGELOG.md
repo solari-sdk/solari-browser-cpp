@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.4
+
+- **`Profile::sizeBytes`.** The gateway returns each profile's `sizeBytes` as a JSON number, but `Profile` did not declare it, so it was reachable only through `raw` (retest D-25). It is now `std::optional<long long> sizeBytes`, empty for a profile that has not been saved yet, as `Profile.sizeBytes` in TypeScript (and `SizeBytes` in Go). `raw` still carries the whole row.
+- **The `ProxyOptions::session` doc said "alnum + dash, <=32 chars".** The gateway accepts any label of 1 to 128 characters and turns it into a stable id for the proxy vendor; the doc now says so.
+
 ## v0.5.3
 
 - **The gateway's error body no longer carries the session id into error messages.** `GET /sessions/<id>/replay-url` answered `404 ReplayPending` with the full `sessionId` in its body and `throwHttpError` appended that body. The id is the credential inside the ws/cdp URLs. The body is now redacted (`redactBody()`: the request path's id, in any spelling, and every `"sessionId"` field cut to 8 characters); `code` is still parsed from the raw body.
