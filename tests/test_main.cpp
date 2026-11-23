@@ -738,6 +738,11 @@ struct MockServer {
           arrivals.push_back(std::chrono::steady_clock::now());
         }
 
+        if (status == 0) {  // scripted transport error: close without a reply
+          ::close(fd);
+          continue;
+        }
+
         std::ostringstream resp;
         resp << "HTTP/1.1 " << status << " X\r\n"
              << "Content-Type: application/json\r\n"
@@ -832,6 +837,22 @@ TEST_CASE("a 503 NoCapacity with Retry-After: 1 waits about a second before the 
   REQUIRE(server.arrivals.size() == 2);
   const auto gapMs = std::chrono::duration_cast<std::chrono::milliseconds>(server.arrivals[1] - server.arrivals[0]).count();
   CHECK_MESSAGE(gapMs >= 900, "the retry came after ", gapMs, " ms; Retry-After: 1 asks for 1000");
+}
+
+TEST_CASE("the delay does not stick: after a 503 with Retry-After, a transport error is followed by the plain backoff") {
+  MockServer server({
+      {503, R"({"error":"no capacity","code":"NoCapacity"})"},
+      {0, ""},  // connection closed without a reply
+      {201, R"({"sessionId":"s_ok","wsEndpoint":"wss://x/ws/s_ok"})"},
+  });
+  server.extraHeaders = "Retry-After: 1\r\n";
+  HttpTransport t("slr_live_test", "http://127.0.0.1:" + std::to_string(server.port), 3, 10, 5000);
+  HttpResponse res = t.request("POST", "/sessions", nlohmann::json::object(), newIdempotencyKey());
+  CHECK(res.status == 201);
+  REQUIRE(server.arrivals.size() == 3);
+  auto ms = [&](int a, int b) { return std::chrono::duration_cast<std::chrono::milliseconds>(server.arrivals[b] - server.arrivals[a]).count(); };
+  CHECK_MESSAGE(ms(0, 1) >= 900, "the 503's Retry-After was honoured, gap ", ms(0, 1), " ms");
+  CHECK_MESSAGE(ms(1, 2) < 800, "after the connection error the wait was ", ms(1, 2), " ms: the plain backoff, not the old Retry-After");
 }
 
 TEST_CASE("a 503 without Retry-After keeps the fixed backoff") {
