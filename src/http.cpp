@@ -23,7 +23,28 @@ struct CurlResult {
   std::string body;
   bool networkError = false;
   std::string errMsg;
+  std::string retryAfter;  // the Retry-After response header, raw ("" when absent)
 };
+
+// Captures the Retry-After header (case-insensitive) into the std::string passed as userdata.
+std::size_t headerCb(char* ptr, std::size_t size, std::size_t nmemb, void* userdata) {
+  const std::size_t n = size * nmemb;
+  static const char kName[] = "retry-after:";
+  const std::size_t nameLen = sizeof(kName) - 1;
+  if (n > nameLen) {
+    bool match = true;
+    for (std::size_t i = 0; i < nameLen && match; i++) {
+      match = std::tolower(static_cast<unsigned char>(ptr[i])) == kName[i];
+    }
+    if (match) {
+      std::string v(ptr + nameLen, n - nameLen);
+      const auto b = v.find_first_not_of(" \t");
+      const auto e = v.find_last_not_of(" \t\r\n");
+      *static_cast<std::string*>(userdata) = (b == std::string::npos) ? "" : v.substr(b, e - b + 1);
+    }
+  }
+  return n;
+}
 
 std::size_t writeCb(char* ptr, std::size_t size, std::size_t nmemb, void* userdata) {
   auto* s = static_cast<std::string*>(userdata);
@@ -56,6 +77,8 @@ CurlResult doCurl(const std::string& method, const std::string& url,
   if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCb);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out.body);
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCb);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, &out.retryAfter);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeoutMs);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
@@ -159,6 +182,18 @@ bool saysRetryable(const std::string& body) {
   return it != parsed.end() && it->is_boolean() && it->get<bool>();
 }
 
+long retryAfterDelayMs(const std::string& header, long backoffMs) {
+  // Only the delta-seconds form is read; an HTTP-date (which the TS/Python/Go SDKs also accept) falls back to the backoff here. The gateway sends seconds.
+  constexpr long kMaxRetryAfterMs = 30000;
+  if (header.empty() || header.size() > 9) return backoffMs;
+  long secs = 0;
+  for (const char c : header) {
+    if (c < '0' || c > '9') return backoffMs;
+    secs = secs * 10 + (c - '0');
+  }
+  return std::min(std::max(secs * 1000, backoffMs), kMaxRetryAfterMs);
+}
+
 bool isTerminal(int status, const std::string& body) {
   nlohmann::json parsed;
   try {
@@ -248,6 +283,7 @@ HttpTransport::RawResponse HttpTransport::perform(const PreparedRequest& req) co
   out.body = std::move(c.body);
   out.networkError = c.networkError;
   out.errMsg = std::move(c.errMsg);
+  out.retryAfter = std::move(c.retryAfter);
   return out;
 }
 
@@ -264,6 +300,7 @@ HttpResponse HttpTransport::request(const std::string& method,
       method, path, hasBody, hasBody ? body->dump() : std::string(), idempotencyKey, extraHeaders);
 
   std::string lastErr;
+  long delayMs = backoffMs_;
   for (int attempt = 1; attempt <= maxAttempts; attempt++) {
     RawResponse res = perform(req);
     if (!res.networkError) {
@@ -279,14 +316,17 @@ HttpResponse HttpTransport::request(const std::string& method,
       if (!retryThis || attempt == maxAttempts) {
         return HttpResponse{res.status, std::move(res.body)};
       }
+      // A 503 NoCapacity says when to come back (Retry-After: 10): wait that long, not the short fixed backoff.
+      delayMs = retryAfterDelayMs(res.retryAfter, backoffMs_);
       lastErr = "Solari " + method + " " + redactSessionPath(path) + ": " + std::to_string(res.status);
     } else {
+      delayMs = backoffMs_;
       lastErr = res.errMsg;
     }
 
     if (attempt < maxAttempts) {
-      // FIXED backoff — not exponential (mirrors the reference SDK).
-      std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs_));
+      // FIXED backoff — not exponential (mirrors the reference SDK) — unless the response said Retry-After.
+      std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
     }
   }
 

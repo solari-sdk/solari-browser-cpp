@@ -75,6 +75,13 @@ bool saysRetryable(const std::string& body);
 bool isTerminal(int status, const std::string& body);
 
 /**
+ * Delay before the next attempt: the response's Retry-After in whole seconds (at least `backoffMs`, at most 30 s)
+ * when it has a usable one, else `backoffMs`. A jail kind with no capacity answers `503 NoCapacity` with
+ * `Retry-After: 10`. Only the delta-seconds form is read (an HTTP-date falls back to the backoff).
+ */
+long retryAfterDelayMs(const std::string& header, long backoffMs);
+
+/**
  * Rewrite a Playwright-wire endpoint into its raw-CDP sibling by swapping the
  * `/ws/<id>` path prefix for `/cdp/<id>`. Everything else (scheme, host, query)
  * is preserved. Returns the input unchanged when it doesn't parse or the path
@@ -139,6 +146,7 @@ class HttpTransport {
     std::string body;
     bool networkError = false;
     std::string errMsg;
+    std::string retryAfter;
   };
   RawResponse perform(const PreparedRequest& req) const;
 
